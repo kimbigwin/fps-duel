@@ -6,7 +6,10 @@
   <title>FPS Duel</title>
   <link rel="stylesheet" href="./style.css">
   <script type="importmap">
-    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+    { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    } }
   </script>
 </head>
 <body>
@@ -16,12 +19,26 @@
       <h1>FPS DUEL</h1>
       <p class="sub">1대1 실시간 대결 · 먼저 5킬 하면 승리</p>
       <label>닉네임 <input id="name" maxlength="16" placeholder="Player"></label>
-      <label>방 코드 <input id="room" maxlength="20" placeholder="lobby"></label>
-      <button id="joinBtn">입장하기</button>
+
+      <div class="section">
+        <div class="section-title">AI 봇전 (혼자 하기)</div>
+        <div class="seg" id="diff">
+          <button data-d="easy">쉬움</button><button data-d="normal" class="on">보통</button><button data-d="hard">어려움</button>
+        </div>
+        <button id="botBtn">봇과 대결</button>
+      </div>
+
+      <div class="section">
+        <div class="section-title">온라인 1대1</div>
+        <label>방 코드 <input id="room" maxlength="20" placeholder="lobby"></label>
+        <button id="joinBtn" class="secondary">방 입장하기</button>
+      </div>
+
       <p id="lobbyMsg" class="msg"></p>
       <div class="help">
-        <b>조작</b> WASD 이동 · 마우스 조준 · 클릭 사격 · Space 점프 · Shift 달리기 · Esc 메뉴<br>
-        상대에게 같은 방 코드를 알려주세요. 먼저 들어온 사람이 방장이 되고, 방장이 나가면 게임이 끝납니다.
+        <b>조작</b> WASD 이동 · Shift 달리기 · Space 점프 · 마우스 조준<br>
+        좌클릭 사격 · 우클릭 정조준/스코프 · R 재장전 · 1/2 또는 휠 무기 교체 · Esc 메뉴<br>
+        온라인은 상대에게 같은 방 코드를 알려주세요. 먼저 들어온 사람이 방장이 됩니다.
       </div>
     </div>
   </div>
@@ -33,16 +50,25 @@
     </div>
   </div>
 
+  <!-- 저격 스코프 -->
+  <div id="scope" class="hidden"><div class="ring"></div><div class="h"></div><div class="v"></div></div>
+
   <!-- HUD -->
   <div id="hud" class="hidden">
-    <div id="crosshair"></div>
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
     <div id="hitmarker"></div>
-    <div id="damage"></div>
+    <div id="hitdir"></div>
     <div id="scoreboard"></div>
     <div id="status"></div>
     <div id="feed"></div>
     <div id="center"></div>
     <div id="hpbox"><span>HP</span><div id="hpbar"><div id="hpfill"></div></div><b id="hptext">100</b></div>
+    <div id="ammobox">
+      <div id="wname">돌격소총</div>
+      <div><b id="ammo">30</b><span id="ammomax"> / 30</span></div>
+      <div id="reloadHint"></div>
+      <div id="slots"><span data-w="rifle">1 소총</span><span data-w="sniper">2 저격총</span></div>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>

@@ -36,12 +36,22 @@ export const PLAYER = {
 
 export const RULES = {
   maxHp: 100,
-  bodyDamage: 25,
-  headDamage: 50,
-  fireInterval: 0.25, // 초
   respawnTime: 3,     // 초
   winScore: 5,
 };
+
+// 무기 정의 (판정은 방장 쪽 game.js가 이 값을 사용)
+export const WEAPONS = {
+  rifle: {
+    name: '돌격소총', body: 22, head: 45, interval: 0.11, mag: 30, reload: 2.0,
+    spread: 0.012, adsSpread: 0.003, recoil: 0.010, fov: 55, auto: true,
+  },
+  sniper: {
+    name: '저격총', body: 85, head: 150, interval: 1.3, mag: 5, reload: 2.8,
+    spread: 0.06, adsSpread: 0.0, recoil: 0.06, fov: 18, auto: false,
+  },
+};
+export const WEAPON_ORDER = ['rifle', 'sniper'];
 
 // 축 정렬 박스(AABB) 목록: 벽 + 장애물
 export function solidAABBs() {

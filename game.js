@@ -1,5 +1,5 @@
 // 게임 판정 로직: 방장(먼저 들어온 사람) 브라우저에서 실행됩니다.
-import { SPAWNS, RULES, solidAABBs, rayAABB, playerHitboxes } from './map.js';
+import { SPAWNS, RULES, WEAPONS, solidAABBs, rayAABB, playerHitboxes } from './map.js';
 
 const SOLIDS = solidAABBs();
 
@@ -21,6 +21,8 @@ export class GameRoom {
     p.pos = [s.x, 0, s.z];
     p.hp = RULES.maxHp;
     p.dead = false;
+    p.ammo = Object.fromEntries(Object.entries(WEAPONS).map(([k, w]) => [k, w.mag]));
+    p.reloadEnd = 0;
     return { id: p.id, pos: p.pos, yaw: s.yaw, hp: p.hp };
   }
 
@@ -52,6 +54,11 @@ export class GameRoom {
     this.broadcast({ t: 'scores', scores: this.scores() });
   }
 
+  // 재장전 시간이 지났으면 탄창 채움 (네트워크 지연 여유 0.15초)
+  finishReload(p, now) {
+    if (p.reloadEnd && p.reloadEnd <= now + 0.15) { p.ammo[p.reloadW] = WEAPONS[p.reloadW].mag; p.reloadEnd = 0; }
+  }
+
   message(id, m) {
     const me = this.players.get(id);
     if (!me || !m) return;
@@ -59,13 +66,28 @@ export class GameRoom {
     if (m.t === 'state' && !me.dead) {
       if (!Array.isArray(m.p) || m.p.length !== 3 || !m.p.every(Number.isFinite)) return;
       me.pos = m.p; me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
-      this.players.forEach(p => p !== me && p.send({ t: 'state', id: me.id, p: me.pos, yaw: me.yaw, pitch: me.pitch }));
+      me.w = WEAPONS[m.w] ? m.w : 'rifle';
+      this.players.forEach(p => p !== me && p.send({ t: 'state', id: me.id, p: me.pos, yaw: me.yaw, pitch: me.pitch, w: me.w, ads: !!m.ads }));
+    }
+
+    // 재장전: 방장이 탄약 수를 관리
+    if (m.t === 'reload' && !me.dead && WEAPONS[m.w]) {
+      const now = Date.now() / 1000;
+      this.finishReload(me, now);
+      if (me.reloadEnd > now || me.ammo[m.w] >= WEAPONS[m.w].mag) return;
+      me.reloadEnd = now + WEAPONS[m.w].reload;
+      me.reloadW = m.w;
     }
 
     if (m.t === 'shoot' && !me.dead && !this.over) {
       const now = Date.now() / 1000;
-      if (now - me.lastShot < RULES.fireInterval * 0.8) return;
+      const wname = WEAPONS[m.w] ? m.w : 'rifle', W = WEAPONS[wname];
+      this.finishReload(me, now);
+      if (me.reloadEnd > now) return;                      // 재장전 중
+      if (me.ammo[wname] <= 0) return;                     // 탄 없음
+      if (now - me.lastShot < W.interval * 0.5) return;    // 연사 제한 (네트워크 지연 여유)
       me.lastShot = now;
+      me.ammo[wname]--;
 
       const o = [me.pos[0], me.pos[1] + 1.6, me.pos[2]];
       let d = m.dir;
@@ -84,16 +106,16 @@ export class GameRoom {
         if (t < wallT) { hit = { p, head: th <= tb }; wallT = t; }
       }
       const end = o.map((v, i) => v + d[i] * wallT);
-      this.broadcast({ t: 'shot', id: me.id, o, end });
+      this.broadcast({ t: 'shot', id: me.id, o, end, w: wname, hitPlayer: !!hit });
 
       if (hit) {
         const v = hit.p;
-        v.hp -= hit.head ? RULES.headDamage : RULES.bodyDamage;
-        this.broadcast({ t: 'hit', target: v.id, by: me.id, hp: Math.max(0, v.hp), head: hit.head });
+        v.hp -= hit.head ? W.head : W.body;
+        this.broadcast({ t: 'hit', target: v.id, by: me.id, hp: Math.max(0, v.hp), head: hit.head, w: wname, from: o });
         if (v.hp <= 0) {
           v.dead = true;
           me.score++;
-          this.broadcast({ t: 'kill', killer: me.id, victim: v.id, head: hit.head, scores: this.scores() });
+          this.broadcast({ t: 'kill', killer: me.id, victim: v.id, head: hit.head, w: wname, scores: this.scores() });
           if (me.score >= RULES.winScore) {
             this.over = true;
             this.broadcast({ t: 'win', id: me.id, name: me.name });
