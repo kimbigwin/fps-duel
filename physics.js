@@ -19,7 +19,7 @@ export function stepMovement(ent, input, dt) {
   let vx = -sin * input.f + cos * input.s, vz = -cos * input.f - sin * input.s;
   const len = Math.hypot(vx, vz);
   if (len > 0) { vx = vx / len * input.speed; vz = vz / len * input.speed; }
-  const accel = ent.onGround ? 14 : 3;
+  const accel = input.accel ?? (ent.onGround ? 14 : 3);
   ent.vel.x += (vx - ent.vel.x) * Math.min(1, accel * dt);
   ent.vel.z += (vz - ent.vel.z) * Math.min(1, accel * dt);
   if (input.jump && ent.onGround) { ent.vel.y = MOVE.jump; ent.onGround = false; }

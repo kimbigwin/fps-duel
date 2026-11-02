@@ -17,15 +17,21 @@
   <div id="lobby" class="overlay">
     <div class="panel">
       <h1>FPS DUEL</h1>
-      <p class="sub">1대1 실시간 대결 · 먼저 5킬 하면 승리</p>
+      <p class="sub">1대1 라운드 대결 · 킬 1번 = 1라운드 · 먼저 7라운드 승리</p>
       <label>닉네임 <input id="name" maxlength="16" placeholder="Player"></label>
 
       <div class="section">
-        <div class="section-title">AI 봇전 (혼자 하기)</div>
+        <div class="section-title">로그라이크 런 (혼자 하기)</div>
+        <div class="hint">10스테이지 · 스테이지마다 증강 3택 · 한 번 죽으면 처음부터 · <span id="bestRun"></span></div>
+        <button id="runBtn" class="run">런 시작</button>
+      </div>
+
+      <div class="section">
+        <div class="section-title">AI 봇전 (7라운드 선승)</div>
         <div class="seg" id="diff">
           <button data-d="easy">쉬움</button><button data-d="normal" class="on">보통</button><button data-d="hard">어려움</button>
         </div>
-        <button id="botBtn">봇과 대결</button>
+        <button id="botBtn" class="secondary">봇과 대결</button>
       </div>
 
       <div class="section">
@@ -38,8 +44,33 @@
       <div class="help">
         <b>조작</b> WASD 이동 · Shift 달리기 · Space 점프 · 마우스 조준<br>
         좌클릭 사격 · 우클릭 정조준/스코프 · R 재장전 · 1/2 또는 휠 무기 교체 · Esc 메뉴<br>
+        증강은 1·4·8라운드 뒤에 같은 등급 카드 중 1장 선택 (클릭 또는 1~4 키), 저주 카드는 번갈아 추가<br>
         온라인은 상대에게 같은 방 코드를 알려주세요. 먼저 들어온 사람이 방장이 됩니다.
       </div>
+      <button id="creditsBtn" class="link">크레딧 · 사용한 에셋</button>
+    </div>
+  </div>
+
+  <!-- 크레딧 -->
+  <div id="credits" class="overlay hidden">
+    <div class="panel wide">
+      <h1>크레딧</h1>
+      <p class="sub">이 게임에 쓴 외부 에셋과 라이선스입니다. 모두 CC0(퍼블릭 도메인)이라 출처 표기 의무는 없지만 감사의 뜻으로 적습니다.</p>
+      <ul class="credits">
+        <li><b>사람 캐릭터</b> — MakeHuman 시스템 에셋 (MakeHuman 커뮤니티, MPFB2로 생성) · CC0</li>
+        <li><b>캐릭터 동작</b> — Universal Animation Library (Quaternius) · CC0</li>
+        <li><b>총 모델</b> — CC0 Flat Guns West/East (Pichuliru, OpenGameArt) · CC0</li>
+        <li><b>실제 총소리</b> — The Free Firearm Sound Library (Ben Jaszczak 외) · CC0</li>
+        <li><b>탄착음·발소리·피격음</b> — Impact Sounds (Kenney) · CC0</li>
+        <li><b>버튼 소리</b> — UI Audio (Kenney) · CC0</li>
+        <li><b>점프·착지·무기 교체음</b> — Starter Kit FPS (Kenney) · 에셋 CC0</li>
+        <li><b>총구 화염·연기·스파크·그을음·탄도선</b> — Particle Pack (Kenney) · CC0</li>
+        <li><b>바닥·벽 텍스처</b> — Asphalt031, Concrete034, Bricks097, Metal049A (ambientCG) · CC0</li>
+        <li><b>증강 카드 패널</b> — Free UI Minimalism SciFi (Wenrexa) · CC0</li>
+        <li><b>증강 카드 아이콘</b> — UI Pack: Sci-fi (Kenney) · CC0</li>
+        <li><b>엔진</b> — three.js (MIT), PeerJS (MIT)</li>
+      </ul>
+      <button id="creditsClose" class="secondary">닫기</button>
     </div>
   </div>
 
@@ -47,6 +78,28 @@
   <div id="pause" class="overlay hidden">
     <div class="panel small">
       <p id="pauseText">클릭해서 게임 시작</p>
+    </div>
+  </div>
+
+  <!-- 증강 선택 -->
+  <div id="pick" class="overlay hidden">
+    <div class="pickwrap">
+      <div id="pickTitle">증강 선택</div>
+      <div id="pickTimer"><i></i></div>
+      <div id="cards"></div>
+      <button id="rerollBtn" class="secondary hidden">새로고침</button>
+      <div id="pickWait" class="hidden">상대가 고르는 중...</div>
+    </div>
+  </div>
+
+  <!-- 런 결과 -->
+  <div id="runEnd" class="overlay hidden">
+    <div class="panel">
+      <h1 id="runEndTitle">런 종료</h1>
+      <p id="runEndText" class="sub"></p>
+      <div id="runEndAugs" class="augchips"></div>
+      <button id="runAgain" class="run">다시 도전</button>
+      <button id="toLobby" class="secondary">처음 화면으로</button>
     </div>
   </div>
 
@@ -62,6 +115,11 @@
     <div id="status"></div>
     <div id="feed"></div>
     <div id="center"></div>
+    <div id="banner"></div>
+    <div id="dmgLayer"></div>
+    <div id="opAugs" class="augchips"></div>
+    <div id="myAugs" class="augchips"></div>
+    <div id="cooldowns"></div>
     <div id="hpbox"><span>HP</span><div id="hpbar"><div id="hpfill"></div></div><b id="hptext">100</b></div>
     <div id="ammobox">
       <div id="wname">돌격소총</div>

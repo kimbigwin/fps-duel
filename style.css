@@ -65,3 +65,71 @@ button.secondary:hover { background: #435173; }
 #slots { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; font-size: 12px; }
 #slots span { padding: 2px 8px; border-radius: 4px; background: rgba(255, 255, 255, .08); color: #9aa4b5; }
 #slots span.on { background: #ff8a3d; color: #111; font-weight: 800; text-shadow: none; }
+
+/* ---------- v3: 라운드 / 증강 / 런 ---------- */
+.hint { font-size: 12px; color: #9aa4b5; }
+button.run { background: linear-gradient(90deg, #a35cff, #ff6a3d); color: #fff; }
+button.run:hover { filter: brightness(1.12); background: linear-gradient(90deg, #a35cff, #ff6a3d); }
+
+#banner { position: absolute; top: 24%; left: 50%; transform: translate(-50%, -50%); font-size: 56px; font-weight: 900; letter-spacing: 4px; text-align: center; opacity: 0; white-space: nowrap; }
+#banner small { display: block; font-size: 18px; letter-spacing: 1px; font-weight: 700; color: #c9d1dd; }
+#banner.show { animation: bannerIn 1.6s ease-out forwards; }
+#banner.boss { color: #ff4d5e; text-shadow: 0 0 24px rgba(255, 60, 80, .7); }
+#banner.clear { color: #ffd34d; text-shadow: 0 0 24px rgba(255, 200, 60, .7); }
+@keyframes bannerIn { 0% { opacity: 0; transform: translate(-50%, -50%) scale(1.6); } 15% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -50%) scale(.96); } }
+
+#center.count { font-size: 96px; animation: pop .35s ease-out; }
+@keyframes pop { from { transform: translate(-50%, -50%) scale(1.6); opacity: .2; } to { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
+
+#dmgLayer { position: absolute; inset: 0; overflow: hidden; }
+.dmg { position: absolute; font-weight: 900; font-size: 20px; color: #fff; text-shadow: 0 2px 3px #000; transform: translate(-50%, -50%); animation: dmgUp .8s ease-out forwards; }
+.dmg.head { color: #ffd34d; font-size: 28px; }
+.dmg.big { font-size: 34px; color: #ff6a3d; }
+@keyframes dmgUp { 0% { opacity: 1; transform: translate(-50%, -50%) scale(1.4); } 20% { transform: translate(-50%, -70%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -260%) scale(.9); } }
+
+#hitmarker.kill { width: 40px; height: 40px; }
+#hitmarker.kill::before { left: 19px; height: 40px; width: 3px; background: #ff3b3b; }
+#hitmarker.kill::after { top: 19px; width: 40px; height: 3px; background: #ff3b3b; }
+#crosshair.hitpulse i { background: #ff5a5a; }
+
+.augchips { display: flex; gap: 4px; flex-wrap: wrap; }
+.augchips span { font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 10px; background: rgba(0, 0, 0, .55); border: 1px solid currentColor; text-shadow: none; }
+#opAugs { position: absolute; top: 84px; left: 50%; transform: translateX(-50%); justify-content: center; max-width: 60vw; }
+#myAugs { position: absolute; left: 24px; bottom: 74px; max-width: 40vw; }
+#cooldowns { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); font-size: 13px; font-weight: 800; color: #c9d1dd; display: flex; gap: 12px; }
+#cooldowns .ready { color: #6dff9c; }
+
+#pick { background: rgba(6, 8, 14, .78); z-index: 12; }
+.pickwrap { display: flex; flex-direction: column; align-items: center; gap: 18px; width: min(980px, 96vw); }
+#pickTitle { font-size: 30px; font-weight: 900; letter-spacing: 3px; color: #fff; }
+#pickTimer { width: 60%; height: 6px; background: rgba(255, 255, 255, .12); border-radius: 3px; overflow: hidden; }
+#pickTimer i { display: block; height: 100%; width: 100%; background: #ff8a3d; }
+#cards { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
+/* 증강 카드: Wenrexa "Free UI Minimalism SciFi" SelectPanel01 (CC0) + Kenney 아이콘 (CC0). 등급 색은 CSS로 입힘 */
+.card { width: 210px; height: 370px; padding: 0; background: url(assets/ui/panel.png) center / 100% 100% no-repeat; filter: drop-shadow(0 0 12px color-mix(in srgb, var(--c) 40%, transparent)); display: flex; flex-direction: column; align-items: center; cursor: pointer; transition: transform .15s, filter .15s; opacity: 0; animation: cardIn .45s ease-out forwards; position: relative; overflow: hidden; text-align: center; }
+.card::before { content: ""; position: absolute; top: 0; left: 26px; right: 26px; height: 3px; background: var(--c); box-shadow: 0 0 10px var(--c); }
+.card:nth-child(2) { animation-delay: .12s; } .card:nth-child(3) { animation-delay: .24s; } .card:nth-child(4) { animation-delay: .36s; }
+.card:hover { transform: translateY(-8px) scale(1.03); filter: drop-shadow(0 0 22px var(--c)); }
+.card .tier { margin-top: 22px; font-size: 12px; font-weight: 900; letter-spacing: 4px; color: var(--c); }
+.card .gem { margin-top: 22px; width: 100px; height: 100px; position: relative; flex: none; }
+.card .gem::before { content: ""; position: absolute; inset: 8px; border: 1px solid color-mix(in srgb, var(--c) 45%, transparent); transform: rotate(45deg); }
+.card .gem i { position: absolute; inset: 14px; background: var(--c); -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+.card .name { margin-top: 26px; font-size: 21px; font-weight: 900; color: #fff; padding: 0 14px; }
+.card .line { margin: 12px 0 10px; width: 70%; height: 1px; background: linear-gradient(90deg, transparent, var(--c), transparent); flex: none; }
+.card .desc { font-size: 14px; color: #c7d3d8; line-height: 1.6; flex: 1; padding: 0 20px; }
+.card .key { margin-bottom: 18px; font-size: 11px; color: #7f8899; }
+.card.prism::after { content: ""; position: absolute; inset: -50%; background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, .14) 50%, transparent 60%); animation: shine 2.2s infinite; pointer-events: none; }
+.card.chosen { animation: chosen .6s ease-out forwards; }
+@media (max-width: 900px) { .card { width: 170px; height: 310px; } .card .gem { width: 80px; height: 80px; margin-top: 14px; } .card .name { font-size: 18px; margin-top: 16px; } }
+@keyframes cardIn { from { opacity: 0; transform: translateY(40px) rotateY(80deg); } to { opacity: 1; transform: none; } }
+@keyframes shine { from { transform: translateX(-60%); } to { transform: translateX(60%); } }
+@keyframes chosen { 0% { transform: scale(1); } 40% { transform: scale(1.12); filter: drop-shadow(0 0 40px var(--c)); } 100% { transform: scale(1.05); opacity: 1; filter: drop-shadow(0 0 24px var(--c)); } }
+#pickWait { color: #c9d1dd; }
+#stageTag { color: #ffd34d; }
+
+/* 크레딧 */
+button.link { background: none; border: none; color: #8fa3c0; text-decoration: underline; cursor: pointer; font-size: 13px; padding: 4px; }
+.panel.wide { width: min(640px, 94vw); }
+ul.credits { margin: 0; padding-left: 18px; color: #c9d1dd; font-size: 14px; line-height: 1.7; }
+ul.credits b { color: #fff; }
+#credits { z-index: 30; }

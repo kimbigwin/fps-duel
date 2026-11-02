@@ -27,7 +27,7 @@ scene.add(camera);
 
 // 1인칭 총은 별도 씬/카메라로 그려서 벽에 파묻히지 않게 함
 export const viewScene = new THREE.Scene();
-export const viewCamera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.01, 10);
+export const viewCamera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 10);
 
 // ---------- 하늘 + 환경광 ----------
 const sky = new Sky();
@@ -190,7 +190,7 @@ const floorSet = concreteSet('#7d7f80', 1, 8);
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(S, S), mat(floorSet, S / 8, S / 8, { roughness: 0.92 }));
 floor.material.normalScale.set(0.6, 0.6);
 floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
-scene.add(floor); mapMeshes.push(floor);
+scene.add(floor); mapMeshes.push(floor); floor.userData.kind = 'wall';
 
 // 바깥 지면 (아레나 밖이 허공으로 보이지 않게)
 const outer = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshStandardMaterial({ color: 0x6f6a60, roughness: 1 }));
@@ -232,10 +232,31 @@ SOLIDS.forEach((a, i) => {
   const geo = new THREE.BoxGeometry(w, h, d);
   boxUV(geo, w, h, d, scale);
   const mesh = new THREE.Mesh(geo, m);
+  mesh.userData.kind = m === mats.wood ? 'wood' : (m === wallMat || m === mats.center) ? 'wall' : 'metal'; // 탄착음 종류
   mesh.position.set((a.min[0] + a.max[0]) / 2, h / 2, (a.min[2] + a.max[2]) / 2);
   mesh.castShadow = mesh.receiveShadow = true;
   scene.add(mesh); mapMeshes.push(mesh);
 });
+
+// ---------- 실사 텍스처 (ambientCG, CC0) ----------
+// 직접 그린 텍스처를 먼저 쓰고, 사진 텍스처가 로드되면 바꿉니다.
+const texLoader = new THREE.TextureLoader();
+function pbr(material, name, repeat, { color = true, normalScale = 1 } = {}) {
+  const load = (kind, srgb, apply) => texLoader.load(`assets/tex/${name}_${kind}.jpg`, t => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat);
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    apply(t); material.needsUpdate = true;
+  }, undefined, () => console.warn('텍스처 로드 실패', name, kind));
+  if (color) load('Color', true, t => { material.map = t; material.color.set(0xffffff); });
+  load('NormalGL', false, t => { material.normalMap = t; material.normalScale.set(normalScale, normalScale); });
+  load('Roughness', false, t => { material.roughnessMap = t; material.roughness = 1; });
+}
+pbr(floor.material, 'Asphalt031', S / 4);              // 바닥: 아스팔트 (4m마다 반복)
+pbr(wallMat, 'Concrete034', 2);                         // 외벽: 콘크리트
+pbr(mats.center, 'Bricks097', 1);                       // 가운데 건물: 벽돌
+for (const k of ['red', 'blue', 'green']) pbr(mats[k], 'Metal049A', 1, { color: false, normalScale: 0.6 }); // 컨테이너: 칠한 색 + 금속 질감
+pbr(mats.pillar, 'Metal049A', 1, { color: false });
 
 // 벽 위 조명 기둥 (장식)
 const poleMat = new THREE.MeshStandardMaterial({ color: 0x2b2e33, roughness: 0.5, metalness: 0.7 });
@@ -301,19 +322,49 @@ const holeTex = spriteTex(g => {
   g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
 });
 
+// ---- Kenney Particle Pack (CC0) 이미지: 총구 화염, 연기, 스파크, 그을음, 탄도선, 섬광 ----
+const FX = { muzzle: [], smoke: [], spark: [], scorch: [], trace: [], flare: [] };
+const FX_COUNT = { muzzle: 5, smoke: 9, spark: 7, scorch: 3, trace: 7, flare: 1 };
+for (const [k, n] of Object.entries(FX_COUNT)) for (let i = 1; i <= n; i++) {
+  texLoader.load(`assets/fx/${k}_0${i}.png`, t => { t.colorSpace = THREE.SRGBColorSpace; FX[k].push(t); }, undefined, () => console.warn('파티클 로드 실패', k, i));
+}
+const pickFx = (k, fallback) => FX[k].length ? FX[k][Math.floor(Math.random() * FX[k].length)] : fallback;
+export const muzzleTex = () => pickFx('muzzle', flashTex);
+
+// 탄도선: 총알 방향으로 길게 늘인 십자 판 2장 (어느 각도에서 봐도 보이게)
 export function tracer(a, b, color = 0xffd27a) {
   const len = a.distanceTo(b);
   if (len < 0.5) return;
-  const geo = new THREE.CylinderGeometry(0.012, 0.012, len, 4, 1, true);
+  const g = new THREE.Group();
+  const tex = pickFx('trace', null);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, color: new THREE.Color(color).multiplyScalar(tex ? 3 : 4), transparent: true, toneMapped: false, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending });
+  const geo = new THREE.PlaneGeometry(tex ? 0.09 : 0.025, len);
   geo.translate(0, len / 2, 0); geo.rotateX(Math.PI / 2);
-  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(4), transparent: true, toneMapped: false, depthWrite: false }));
-  m.position.copy(a); m.lookAt(b);
-  scene.add(m);
-  effects.push({ obj: m, life: 0.07, max: 0.07, dispose: true });
+  const p1 = new THREE.Mesh(geo, mat), p2 = new THREE.Mesh(geo, mat); p2.rotation.z = Math.PI / 2;
+  g.add(p1, p2);
+  g.position.copy(a); g.lookAt(b);
+  g.material = mat; // updateEffects가 투명도를 조절
+  scene.add(g);
+  effects.push({ obj: g, life: 0.07, max: 0.07, dispose: true });
+}
+// 다른 플레이어의 총구 화염
+export function muzzleFlash(p, size = 0.5) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: muzzleTex(), color: new THREE.Color(1.6, 1.3, 1), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, rotation: Math.random() * Math.PI }));
+  s.position.copy(p); s.scale.setScalar(size);
+  scene.add(s);
+  effects.push({ obj: s, life: 0.05, max: 0.05 });
 }
 
 const sparkGeo = new THREE.BoxGeometry(0.02, 0.02, 0.1);
 export function sparks(p, normal, color = 0xffb050, count = 8) {
+  // 탄착 순간 번쩍이는 스파크 이미지
+  const tex = pickFx('spark', null);
+  if (tex) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, rotation: Math.random() * Math.PI }));
+    s.position.copy(p).addScaledVector(normal, 0.05); s.scale.setScalar(0.25 + count * 0.03);
+    scene.add(s);
+    effects.push({ obj: s, life: 0.09, max: 0.09 });
+  }
   for (let i = 0; i < count; i++) {
     const m = new THREE.Mesh(sparkGeo, new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(3), transparent: true, toneMapped: false }));
     m.position.copy(p);
@@ -324,7 +375,7 @@ export function sparks(p, normal, color = 0xffb050, count = 8) {
   }
 }
 export function puff(p, color = 0xcfcac0, size = 0.5, life = 0.6) {
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, color, transparent: true, depthWrite: false }));
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: pickFx('smoke', puffTex), color, transparent: true, depthWrite: false, rotation: Math.random() * Math.PI * 2 }));
   s.position.copy(p); s.scale.setScalar(size);
   scene.add(s);
   effects.push({ obj: s, life, max: life, grow: size * 1.8, vel: new THREE.Vector3(0, 0.4, 0) });
@@ -343,13 +394,23 @@ export function blood(p) {
 const decals = [];
 const holeGeo = new THREE.PlaneGeometry(0.14, 0.14);
 const holeMat = new THREE.MeshStandardMaterial({ map: holeTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 1 });
+// 탄흔: 가운데 구멍 + 그 주변 그을음(Kenney scorch)
+const scorchGeo = new THREE.PlaneGeometry(0.3, 0.3);
+const scorchMats = [];
 export function bulletHole(p, normal) {
+  if (FX.scorch.length && scorchMats.length < FX.scorch.length) for (const t of FX.scorch.slice(scorchMats.length)) scorchMats.push(new THREE.MeshStandardMaterial({ map: t, color: 0x1a1612, transparent: true, opacity: 0.75, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, roughness: 1 }));
+  if (scorchMats.length) {
+    const sc = new THREE.Mesh(scorchGeo, scorchMats[Math.floor(Math.random() * scorchMats.length)]);
+    sc.position.copy(p).addScaledVector(normal, 0.004); sc.lookAt(p.clone().add(normal)); sc.rotateZ(Math.random() * Math.PI * 2);
+    sc.scale.setScalar(0.6 + Math.random() * 0.5);
+    scene.add(sc); decals.push(sc);
+  }
   const m = new THREE.Mesh(holeGeo, holeMat);
   m.position.copy(p).addScaledVector(normal, 0.005);
   m.lookAt(p.clone().add(normal));
   m.rotateZ(Math.random() * Math.PI);
   scene.add(m); decals.push(m);
-  if (decals.length > 80) scene.remove(decals.shift());
+  while (decals.length > 120) scene.remove(decals.shift());
 }
 
 // 탄착 지점의 면 방향 찾기 (맵 메쉬에 레이캐스트)
@@ -359,7 +420,7 @@ export function surfaceAt(from, to) {
   ray.set(from, dir); ray.far = dist + 0.3;
   const hit = ray.intersectObjects(mapMeshes, false)[0];
   if (!hit) return null;
-  return { point: hit.point, normal: hit.face.normal.clone().transformDirection(hit.object.matrixWorld) };
+  return { point: hit.point, normal: hit.face.normal.clone().transformDirection(hit.object.matrixWorld), kind: hit.object.userData.kind || 'wall' };
 }
 
 export function updateEffects(dt) {
@@ -374,7 +435,7 @@ export function updateEffects(dt) {
     e.obj.material.opacity = Math.max(0, e.life / e.max);
     if (e.life <= 0) {
       scene.remove(e.obj);
-      if (e.dispose) e.obj.geometry.dispose();
+      if (e.dispose) { if (e.obj.geometry) e.obj.geometry.dispose(); else e.obj.children[0]?.geometry.dispose(); }
       e.obj.material.dispose();
       effects.splice(i, 1);
     }

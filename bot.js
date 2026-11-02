@@ -1,6 +1,8 @@
 // AI 봇: 방장 브라우저 안에서 GameRoom에 '플레이어'로 참가합니다.
-import { ARENA, WEAPONS, rayAABB } from './map.js';
+import { ARENA, WEAPONS, lineOfSight } from './map.js';
 import { SOLIDS, stepMovement, MOVE } from './physics.js';
+import { statsFor, effWeapon, stageInfo } from './augments.js';
+export { lineOfSight };
 
 export const DIFFICULTY = {
   easy:   { label: '쉬움',   reaction: 0.75, aimError: 0.055, turn: 3.0, strafe: 0.4, headChance: 0.05 },
@@ -59,16 +61,18 @@ function findPath(from, to) {
   return path.reverse();
 }
 
-// 두 점 사이에 벽이 없는지
-export function lineOfSight(a, b) {
-  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-  const dist = Math.hypot(...d);
-  const n = d.map(v => v / dist);
-  for (const box of SOLIDS) if (rayAABB(a, n, box) < dist) return false;
-  return true;
-}
-
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+// 봇전 런: 단계(0~1.1)에 따라 쉬움 -> 어려움 이상으로 보간
+function levelCfg(level) {
+  const e = DIFFICULTY.easy, h = DIFFICULTY.hard;
+  const t = Math.max(0, level);
+  return {
+    label: '런', reaction: Math.max(0.15, lerp(e.reaction, h.reaction, t)), aimError: Math.max(0.009, lerp(e.aimError, h.aimError, t)),
+    turn: lerp(e.turn, h.turn, t), strafe: lerp(e.strafe, h.strafe, Math.min(1, t)), headChance: lerp(e.headChance, h.headChance, Math.min(1, t)),
+  };
+}
 
 export class Bot {
   constructor(room, difficulty = 'normal') {
@@ -77,22 +81,32 @@ export class Bot {
     this.ent = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, onGround: true };
     this.yaw = 0; this.pitch = 0; this.dead = false;
     this.weapon = 'rifle';
-    this.ammo = { rifle: WEAPONS.rifle.mag, sniper: WEAPONS.sniper.mag };
+    this.augs = []; this.stats = statsFor([]);
+    this.ammo = this.fullAmmo();
     this.reloadUntil = 0; this.lastShot = 0;
     this.path = []; this.repath = 0;
     this.seeTime = 0; this.strafeDir = 1; this.strafeTimer = 0; this.sendAcc = 0;
-    this.id = room.join('BOT', msg => this.onMessage(msg));
+    this.id = room.join('BOT', msg => this.onMessage(msg), { isBot: true, autoPick: true });
   }
+
+  fullAmmo() { return { rifle: effWeapon('rifle', this.stats).mag, sniper: effWeapon('sniper', this.stats).mag }; }
+  W(name) { return effWeapon(name, this.stats); }
+
+  // 런 모드면 스테이지 설정을 따름
+  stage() { return this.room.mode === 'run' ? stageInfo(this.room.stage) : null; }
 
   onMessage(m) {
     if ((m.t === 'welcome' || m.t === 'respawn') && m.id === this.id) {
       Object.assign(this.ent.pos, { x: m.pos[0], y: m.pos[1], z: m.pos[2] });
       this.ent.vel = { x: 0, y: 0, z: 0 };
       this.yaw = m.yaw; this.pitch = 0; this.dead = false;
-      this.ammo = { rifle: WEAPONS.rifle.mag, sniper: WEAPONS.sniper.mag };
+      this.ammo = this.fullAmmo();
       this.reloadUntil = 0; this.seeTime = 0; this.path = []; this.pendingReload = null;
-      this.waitUntil = performance.now() / 1000 + 1.2; // 부활 직후 잠깐 대기
+      const st = this.stage();
+      if (st) this.cfg = levelCfg(st.level);
     }
+    if (m.t === 'augs' && m.id === this.id) { this.augs = m.augs; this.stats = statsFor(m.augs); }
+    if (m.t === 'phase' && m.phase === 'live') this.waitUntil = performance.now() / 1000 + 0.25;
     if (m.t === 'kill' && m.victim === this.id) this.dead = true;
     if (m.t === 'hit' && m.target === this.id && m.from) {
       // 맞으면 공격자 쪽으로 몸을 돌림
@@ -106,10 +120,11 @@ export class Bot {
   }
 
   update(dt) {
-    if (this.dead || this.room.over) return;
+    if (this.dead || this.room.phase !== 'live') return;
     const now = performance.now() / 1000;
     if (now < (this.waitUntil || 0)) return;
-    if (this.pendingReload && now >= this.reloadUntil) { this.ammo[this.pendingReload] = WEAPONS[this.pendingReload].mag; this.pendingReload = null; }
+    if (this.pendingReload && now >= this.reloadUntil) { this.ammo[this.pendingReload] = this.W(this.pendingReload).mag; this.pendingReload = null; }
+    const st = this.stage();
     const me = this.ent.pos;
     const t = this.target();
     const eye = [me.x, me.y + 1.6, me.z];
@@ -120,11 +135,13 @@ export class Bot {
       const dist = Math.hypot(tp.x - me.x, tp.z - me.z);
       const visible = lineOfSight(eye, [tp.x, tp.y + 1.6, tp.z]) || lineOfSight(eye, [tp.x, tp.y + 0.9, tp.z]);
 
-      // 거리에 따라 무기 선택
+      // 거리에 따라 무기 선택 (보스는 무기 고정)
       const wantSniper = dist > 24;
-      if (now > this.reloadUntil) this.weapon = wantSniper && this.ammo.sniper > 0 ? 'sniper' : 'rifle';
+      if (now > this.reloadUntil) this.weapon = st?.weapon || (wantSniper && this.ammo.sniper > 0 ? 'sniper' : 'rifle');
+      // 유령 증강으로 투명해진 상대는 못 봄
+      const ghosted = (t.ghostUntil || 0) > Date.now() / 1000;
 
-      if (visible) {
+      if (visible && !ghosted) {
         this.seeTime += dt;
         this.path = [];
         // 조준: 목표 방향으로 서서히 회전
@@ -141,11 +158,12 @@ export class Bot {
         this.strafeTimer -= dt;
         if (this.strafeTimer <= 0) { this.strafeDir = Math.random() < 0.5 ? -1 : 1; this.strafeTimer = 0.5 + Math.random() * 1.2; this.aimH = 0; }
         input.s = this.strafeDir * this.cfg.strafe;
-        input.f = dist > 18 ? 1 : dist < 8 ? -0.6 : 0;
+        input.f = st?.rush ? (dist > 4 ? 1 : 0) : dist > 18 ? 1 : dist < 8 ? -0.6 : 0;
         input.yaw = this.yaw;
+        input.speed = MOVE.walk * this.stats.speedMul * (st?.rush ? 1.15 : 1);
 
         // 사격
-        const W = WEAPONS[this.weapon];
+        const W = this.W(this.weapon);
         const aimErr = Math.abs(angleDiff(wantYaw, this.yaw)) + Math.abs(wantPitch - this.pitch);
         if (this.seeTime > this.cfg.reaction && aimErr < 0.1 && now > this.reloadUntil && now - this.lastShot > W.interval * (W.auto ? 1.6 : 1.3)) {
           if (this.ammo[this.weapon] <= 0) {
@@ -174,20 +192,20 @@ export class Bot {
           this.yaw += angleDiff(this.alertYaw ?? wantYaw, this.yaw) * Math.min(1, 6 * dt);
           this.alertYaw = undefined;
           this.pitch *= 0.9;
-          input = { f: 1, s: 0, yaw: wantYaw, speed: MOVE.run, jump: false };
+          input = { f: 1, s: 0, yaw: wantYaw, speed: MOVE.run * this.stats.speedMul, jump: false };
         }
       }
       // 재장전 (탄이 적고 안 보일 때)
       if (!visible && now > this.reloadUntil && this.ammo.rifle < 10) {
-        this.reloadUntil = now + WEAPONS.rifle.reload;
+        this.reloadUntil = now + this.W('rifle').reload;
         this.room.message(this.id, { t: 'reload', w: 'rifle' });
         this.pendingReload = 'rifle';
       }
     }
 
     // 상대가 없거나 죽었을 때 탄이 부족하면 재장전
-    if (!t && now > this.reloadUntil && this.ammo.rifle < WEAPONS.rifle.mag) {
-      this.reloadUntil = now + WEAPONS.rifle.reload;
+    if (!t && now > this.reloadUntil && this.ammo.rifle < this.W('rifle').mag) {
+      this.reloadUntil = now + this.W('rifle').reload;
       this.room.message(this.id, { t: 'reload', w: 'rifle' });
       this.pendingReload = 'rifle';
     }
@@ -199,6 +217,6 @@ export class Bot {
 
   sendState() {
     const p = this.ent.pos;
-    this.room.message(this.id, { t: 'state', p: [p.x, p.y, p.z], yaw: this.yaw, pitch: this.pitch, w: this.weapon });
+    this.room.message(this.id, { t: 'state', p: [p.x, p.y, p.z], yaw: this.yaw, pitch: this.pitch, w: this.weapon, air: !this.ent.onGround });
   }
 }

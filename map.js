@@ -22,22 +22,32 @@ export const BOXES = [
   { x: 8, z: -4, w: 1.5, d: 1.5, h: 5 },
 ];
 
-export const SPAWNS = [
-  { x: 0, z: 25, yaw: 0 },        // -z 방향(중앙)을 바라봄
-  { x: 0, z: -25, yaw: Math.PI },
+// 스폰 후보 (가장자리/구석). 라운드마다 서로 안 보이고 먼 두 곳을 고릅니다.
+export const SPAWN_POINTS = [
+  [-26, -26], [26, -26], [-26, 26], [26, 26],
+  [0, -26.5], [0, 26.5], [-26.5, 0], [26.5, 0],
+  [-26, -12], [26, 12], [-14, 26], [14, -26],
+  [-26, 13], [26, -13], [13, 26], [-13, -26],
 ];
+// 맵 중앙을 바라보는 방향
+export const faceCenter = (x, z) => Math.atan2(x, z);
 
 export const PLAYER = {
   radius: 0.4,
   eye: 1.6,
-  bodyHeight: 1.4, // 발~어깨
-  headSize: 0.5,
+  bodyHeight: 1.47, // 발~턱 (사람 모델 키 1.70m, 조준 자세 기준)
+  headSize: 0.25,  // 턱~정수리
+  hitRadius: 0.28, // 몸통 판정 반폭 (어깨+팔 포함)
+  headHalf: 0.14,  // 머리 판정 반폭 (조준 자세로 머리가 앞으로 나온 만큼 포함)
 };
 
 export const RULES = {
   maxHp: 100,
-  respawnTime: 3,     // 초
-  winScore: 5,
+  winRounds: 7,          // 먼저 7라운드 이기면 승리 (킬 1번 = 1라운드)
+  countdown: 3,          // 라운드 시작 전 카운트다운 (초)
+  roundEndTime: 2,       // 킬 후 다음 단계까지 (초)
+  pickTime: 12,          // 증강 선택 제한 시간 (초)
+  augmentRounds: [1, 4, 8], // 이 라운드가 끝난 뒤 증강 선택
 };
 
 // 무기 정의 (판정은 방장 쪽 game.js가 이 값을 사용)
@@ -87,7 +97,7 @@ export function rayAABB(o, d, box) {
 
 // 플레이어 피격 판정용 박스 (발 위치 기준)
 export function playerHitboxes(p) {
-  const r = PLAYER.radius, hs = PLAYER.headSize / 2;
+  const r = PLAYER.hitRadius, hs = PLAYER.headHalf;
   return {
     body: { min: [p[0] - r, p[1], p[2] - r], max: [p[0] + r, p[1] + PLAYER.bodyHeight, p[2] + r] },
     head: {
@@ -95,4 +105,39 @@ export function playerHitboxes(p) {
       max: [p[0] + hs, p[1] + PLAYER.bodyHeight + PLAYER.headSize, p[2] + hs],
     },
   };
+}
+
+// 두 점 사이에 벽/장애물이 없는지
+const _SOLIDS = solidAABBs();
+export function lineOfSight(a, b) {
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const dist = Math.hypot(...d);
+  if (dist < 1e-6) return true;
+  const n = d.map(v => v / dist);
+  for (const box of _SOLIDS) if (rayAABB(a, n, box) < dist) return false;
+  return true;
+}
+
+// 서로 보이는지 (눈높이/몸통 높이 몇 군데 확인)
+export function canSee(p, q) {
+  for (const ha of [1.6, 0.9]) for (const hb of [1.6, 0.9]) {
+    if (lineOfSight([p[0], p[1] + ha, p[2]], [q[0], q[1] + hb, q[2]])) return true;
+  }
+  return false;
+}
+
+// 라운드 시작 스폰 2곳: 서로 안 보이면서 가장 먼 쌍 중 랜덤
+export function pickSpawnPair(rnd = Math.random) {
+  const pts = SPAWN_POINTS.map(([x, z]) => [x, 0, z]);
+  const pairs = [];
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+    const d = Math.hypot(pts[i][0] - pts[j][0], pts[i][2] - pts[j][2]);
+    pairs.push({ a: pts[i], b: pts[j], d, hidden: !canSee(pts[i], pts[j]) });
+  }
+  const hidden = pairs.filter(p => p.hidden);
+  const list = (hidden.length ? hidden : pairs).sort((x, y) => y.d - x.d);
+  // 가장 먼 쌍들 중 상위 몇 개에서 골라서 매번 같은 자리만 나오지 않게
+  const top = list.filter(p => p.d >= list[0].d - 8).slice(0, 8);
+  const pick = top[Math.floor(rnd() * top.length)];
+  return rnd() < 0.5 ? [pick.a, pick.b] : [pick.b, pick.a];
 }
