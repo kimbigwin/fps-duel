@@ -1,5 +1,5 @@
 // 증강 카드 정의 + 효과 계산 (방장 판정과 화면 표시가 같이 씁니다)
-import { WEAPONS } from './map.js';
+import { GUNS, DEFAULT_LOADOUT } from './guns.js';
 
 export const TIERS = {
   silver: { name: '실버', color: '#c9d3df', lv: 0 },
@@ -16,7 +16,7 @@ export const AUGMENTS = {
   lightfoot: { name: '가벼운 발', v: [0.06, 0.1, 0.16], desc: v => `이동 속도 +${pct(v)}%` },
   vest:      { name: '방탄복', v: [15, 25, 40], desc: v => `최대 체력 +${v}` },
   steady:    { name: '흔들림 없는 조준', v: [0.2, 0.35, 0.55], desc: v => `반동 ${pct(v)}% 감소` },
-  breath:    { name: '저격수의 호흡', v: [0.3, 0.5, 0.8], desc: v => `정조준 속도 +${pct(v)}%, 저격총 노리쇠 시간 ${pct(v * 0.6)}% 감소` },
+  breath:    { name: '저격수의 호흡', v: [0.3, 0.5, 0.8], desc: v => `정조준 속도 +${pct(v)}%, 노리쇠·펌프 시간 ${pct(v * 0.6)}% 감소` },
   headhunter:{ name: '헤드헌터', v: [0.2, 0.4, 0.65], desc: v => `헤드샷 데미지 +${pct(v)}%` },
   vamp:      { name: '흡혈', v: [0.12, 0.22, 0.35], desc: v => `준 데미지의 ${pct(v)}%만큼 체력 회복` },
   djump:     { name: '이단 점프', v: [0.65, 0.85, 1.05], desc: v => `공중에서 한 번 더 점프 (높이 ${pct(v)}%)` },
@@ -26,7 +26,7 @@ export const AUGMENTS = {
   pierce:    { name: '관통탄', v: [0.3, 0.5, 0.75], desc: v => `총알이 엄폐물 1개를 뚫음 (뚫은 뒤 데미지 ${pct(v)}%)` },
   revive:    { name: '재생', v: [1, 25, 50], desc: v => `라운드마다 1번, 죽을 피해를 체력 ${v}로 버티고 2초 무적` },
   ghost:     { name: '유령', v: [[0.6, 10], [1, 8], [1.6, 6]], desc: v => `맞으면 ${v[0]}초 동안 투명 (쿨타임 ${v[1]}초)` },
-  quickbolt: { name: '볼트 없는 저격', v: [0.75, 0.5, 0.35], desc: v => `저격총 연사 간격 ×${v}` },
+  quickbolt: { name: '빠른 격발', v: [0.75, 0.6, 0.45], desc: v => `단발 총(저격총·권총·샷건 등) 발사 간격 ×${v}` },
   // 저주: 그 판 등급에 맞춰 위험과 보상이 같이 커짐
   glass:     { name: '유리대포', curse: true, v: [[1.3, 80], [1.6, 60], [1.9, 45]], desc: v => `데미지 ×${v[0]}, 대신 최대 체력 ${v[1]}` },
   gambler:   { name: '도박사', curse: true, v: [[0.7, 1.5], [0.5, 2], [0.3, 2.6]], desc: v => `매 발 데미지가 ${pct(v[0])}%~${pct(v[1])}% 사이에서 랜덤` },
@@ -75,10 +75,12 @@ export function statsFor(augs = []) {
 }
 
 // 증강이 반영된 무기 수치
+// 단발 총(누르고 있어도 한 발만 나가는 총)은 '빠른 격발', 노리쇠/펌프 총은 '저격수의 호흡'이 간격을 줄임
 export function effWeapon(name, stats) {
-  const W = WEAPONS[name];
+  const W = GUNS[name] || GUNS[DEFAULT_LOADOUT[0]];
   let interval = W.interval;
-  if (name === 'sniper') interval *= stats.boltMul * stats.sniperMul;
+  if (!W.auto && !W.burst) interval *= stats.sniperMul;
+  if (W.cycle) interval *= stats.boltMul;
   return {
     ...W,
     mag: Math.round(W.mag * stats.magMul),
@@ -119,8 +121,10 @@ export function rollOptions(owned = [], tier = 'silver', curse = false, rnd = Ma
 export const RUN = { stages: 10 };
 // 스테이지별 봇 설정 (난이도 0~1.2, 보스 정보)
 export function stageInfo(stage) {
-  if (stage === 5) return { name: '보스: 저격수', boss: true, level: 0.75, hpBonus: 50, weapon: 'sniper', augs: 1 };
-  if (stage === 10) return { name: '최종 보스: 중장갑', boss: true, level: 1.0, hpBonus: 200, weapon: 'rifle', rush: true, augs: 3 };
+  if (stage === 5) return { name: '보스: 저격수', boss: true, level: 0.75, hpBonus: 50, weapon: 'snm_w', loadout: ['ar_w', 'snm_w'], augs: 1 };
+  if (stage === 10) return { name: '최종 보스: 중장갑', boss: true, level: 1.0, hpBonus: 200, weapon: 'sga_e', loadout: ['sga_e', 'ar_w'], rush: true, augs: 3 };
   const level = Math.min(1.1, 0.05 + (stage - 1) * 0.12);
-  return { name: `스테이지 ${stage}`, boss: false, level, hpBonus: 0, weapon: null, augs: Math.floor((stage - 1) / 3) };
+  // 스테이지마다 봇 총 구성이 달라짐 (앞: 근중거리, 뒤: 원거리)
+  const LOAD = { 1: ['ar_w', 'snm_w'], 2: ['smg_w', 'pis_w'], 3: ['ar_e', 'snr_w'], 4: ['sgp_w', 'br_e'], 6: ['br_w', 'snr_e'], 7: ['smgc_e', 'snm_w'], 8: ['sga_w', 'snr_w'], 9: ['ar_e', 'snm_e'] };
+  return { name: `스테이지 ${stage}`, boss: false, level, hpBonus: 0, weapon: null, loadout: LOAD[stage] || ['ar_w', 'snm_w'], augs: Math.floor((stage - 1) / 3) };
 }

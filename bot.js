@@ -1,5 +1,6 @@
 // AI 봇: 방장 브라우저 안에서 GameRoom에 '플레이어'로 참가합니다.
-import { ARENA, WEAPONS, lineOfSight } from './map.js';
+import { ARENA, lineOfSight } from './map.js';
+import { DEFAULT_LOADOUT } from './guns.js';
 import { SOLIDS, stepMovement, MOVE } from './physics.js';
 import { statsFor, effWeapon, stageInfo } from './augments.js';
 export { lineOfSight };
@@ -80,7 +81,8 @@ export class Bot {
     this.cfg = DIFFICULTY[difficulty] || DIFFICULTY.normal;
     this.ent = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, onGround: true };
     this.yaw = 0; this.pitch = 0; this.dead = false;
-    this.weapon = 'rifle';
+    this.loadout = [...DEFAULT_LOADOUT];
+    this.weapon = this.loadout[0];
     this.augs = []; this.stats = statsFor([]);
     this.ammo = this.fullAmmo();
     this.reloadUntil = 0; this.lastShot = 0;
@@ -89,7 +91,7 @@ export class Bot {
     this.id = room.join('BOT', msg => this.onMessage(msg), { isBot: true, autoPick: true });
   }
 
-  fullAmmo() { return { rifle: effWeapon('rifle', this.stats).mag, sniper: effWeapon('sniper', this.stats).mag }; }
+  fullAmmo() { return Object.fromEntries(this.loadout.map(k => [k, effWeapon(k, this.stats).mag])); }
   W(name) { return effWeapon(name, this.stats); }
 
   // 런 모드면 스테이지 설정을 따름
@@ -106,6 +108,7 @@ export class Bot {
       if (st) this.cfg = levelCfg(st.level);
     }
     if (m.t === 'augs' && m.id === this.id) { this.augs = m.augs; this.stats = statsFor(m.augs); }
+    if (m.t === 'loadout' && m.id === this.id) { this.loadout = m.loadout; this.weapon = this.loadout[0]; this.ammo = this.fullAmmo(); this.pendingReload = null; }
     if (m.t === 'phase' && m.phase === 'live') this.waitUntil = performance.now() / 1000 + 0.25;
     if (m.t === 'kill' && m.victim === this.id) this.dead = true;
     if (m.t === 'hit' && m.target === this.id && m.from) {
@@ -135,9 +138,9 @@ export class Bot {
       const dist = Math.hypot(tp.x - me.x, tp.z - me.z);
       const visible = lineOfSight(eye, [tp.x, tp.y + 1.6, tp.z]) || lineOfSight(eye, [tp.x, tp.y + 0.9, tp.z]);
 
-      // 거리에 따라 무기 선택 (보스는 무기 고정)
-      const wantSniper = dist > 24;
-      if (now > this.reloadUntil) this.weapon = st?.weapon || (wantSniper && this.ammo.sniper > 0 ? 'sniper' : 'rifle');
+      // 거리에 따라 무기 선택: 가까우면 1번 칸, 멀면 2번 칸 (보스는 무기 고정)
+      const [near, far] = this.loadout;
+      if (now > this.reloadUntil) this.weapon = st?.weapon || (dist > 24 && this.ammo[far] > 0 ? far : near);
       // 유령 증강으로 투명해진 상대는 못 봄
       const ghosted = (t.ghostUntil || 0) > Date.now() / 1000;
 
@@ -158,14 +161,16 @@ export class Bot {
         this.strafeTimer -= dt;
         if (this.strafeTimer <= 0) { this.strafeDir = Math.random() < 0.5 ? -1 : 1; this.strafeTimer = 0.5 + Math.random() * 1.2; this.aimH = 0; }
         input.s = this.strafeDir * this.cfg.strafe;
-        input.f = st?.rush ? (dist > 4 ? 1 : 0) : dist > 18 ? 1 : dist < 8 ? -0.6 : 0;
+        // 샷건/근거리 총이면 붙으러 감
+        const Wn = this.W(this.weapon), close = Wn.range && Wn.range[0] <= 8;
+        input.f = st?.rush || close ? (dist > 4 ? 1 : 0) : dist > 18 ? 1 : dist < 8 ? -0.6 : 0;
         input.yaw = this.yaw;
         input.speed = MOVE.walk * this.stats.speedMul * (st?.rush ? 1.15 : 1);
 
         // 사격
         const W = this.W(this.weapon);
         const aimErr = Math.abs(angleDiff(wantYaw, this.yaw)) + Math.abs(wantPitch - this.pitch);
-        if (this.seeTime > this.cfg.reaction && aimErr < 0.1 && now > this.reloadUntil && now - this.lastShot > W.interval * (W.auto ? 1.6 : 1.3)) {
+        if (this.seeTime > this.cfg.reaction && aimErr < Math.max(0.1, Math.atan(0.45 / Math.max(dist, 0.5))) && now > this.reloadUntil && now - this.lastShot > (W.burst ? (W.burstGap + W.interval * (W.burst - 1)) / W.burst : W.interval) * (W.auto ? 1.6 : 1.3)) {
           if (this.ammo[this.weapon] <= 0) {
             this.reloadUntil = now + W.reload;
             this.room.message(this.id, { t: 'reload', w: this.weapon });
@@ -196,18 +201,19 @@ export class Bot {
         }
       }
       // 재장전 (탄이 적고 안 보일 때)
-      if (!visible && now > this.reloadUntil && this.ammo.rifle < 10) {
-        this.reloadUntil = now + this.W('rifle').reload;
-        this.room.message(this.id, { t: 'reload', w: 'rifle' });
-        this.pendingReload = 'rifle';
+      const w0 = this.weapon;
+      if (!visible && now > this.reloadUntil && this.ammo[w0] < this.W(w0).mag * 0.35) {
+        this.reloadUntil = now + this.W(w0).reload;
+        this.room.message(this.id, { t: 'reload', w: w0 });
+        this.pendingReload = w0;
       }
     }
 
     // 상대가 없거나 죽었을 때 탄이 부족하면 재장전
-    if (!t && now > this.reloadUntil && this.ammo.rifle < this.W('rifle').mag) {
-      this.reloadUntil = now + this.W('rifle').reload;
-      this.room.message(this.id, { t: 'reload', w: 'rifle' });
-      this.pendingReload = 'rifle';
+    if (!t && now > this.reloadUntil && this.ammo[this.weapon] < this.W(this.weapon).mag) {
+      this.reloadUntil = now + this.W(this.weapon).reload;
+      this.room.message(this.id, { t: 'reload', w: this.weapon });
+      this.pendingReload = this.weapon;
     }
 
     stepMovement(this.ent, input, dt);

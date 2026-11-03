@@ -47,21 +47,11 @@ export const RULES = {
   countdown: 3,          // 라운드 시작 전 카운트다운 (초)
   roundEndTime: 2,       // 킬 후 다음 단계까지 (초)
   pickTime: 12,          // 증강 선택 제한 시간 (초)
+  gunPickTime: 10,       // 증강 뒤 총 선택 제한 시간 (초)
   augmentRounds: [1, 4, 8], // 이 라운드가 끝난 뒤 증강 선택
 };
 
-// 무기 정의 (판정은 방장 쪽 game.js가 이 값을 사용)
-export const WEAPONS = {
-  rifle: {
-    name: '돌격소총', body: 22, head: 45, interval: 0.11, mag: 30, reload: 2.0,
-    spread: 0.012, adsSpread: 0.003, recoil: 0.010, fov: 55, auto: true,
-  },
-  sniper: {
-    name: '저격총', body: 85, head: 150, interval: 1.3, mag: 5, reload: 2.8,
-    spread: 0.06, adsSpread: 0.0, recoil: 0.06, fov: 18, auto: false,
-  },
-};
-export const WEAPON_ORDER = ['rifle', 'sniper'];
+// 무기 정의는 guns.js (총 20종)
 
 // 축 정렬 박스(AABB) 목록: 벽 + 장애물
 export function solidAABBs() {

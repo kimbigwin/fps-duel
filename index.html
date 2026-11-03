@@ -43,11 +43,13 @@
       <p id="lobbyMsg" class="msg"></p>
       <div class="help">
         <b>조작</b> WASD 이동 · Shift 달리기 · Space 점프 · 마우스 조준<br>
-        좌클릭 사격 · 우클릭 정조준/스코프 · R 재장전 · 1/2 또는 휠 무기 교체 · Esc 메뉴<br>
+        좌클릭 사격 · 우클릭 정조준/스코프 · R 재장전 · 1/2 또는 휠 무기 교체 · M 음소거 · Esc 메뉴<br>
         증강은 1·4·8라운드 뒤에 같은 등급 카드 중 1장 선택 (클릭 또는 1~4 키), 저주 카드는 번갈아 추가<br>
+        증강을 고른 뒤 총 20종 중 무작위 3개가 나오면, 하나를 골라 1번/2번 칸과 바꾸거나 패스 (증강 효과는 새 총에도 그대로)<br>
         온라인은 상대에게 같은 방 코드를 알려주세요. 먼저 들어온 사람이 방장이 됩니다.
       </div>
       <button id="creditsBtn" class="link">크레딧 · 사용한 에셋</button>
+      <button class="muteBtn" type="button">🔊 소리 켜짐 (M)</button>
     </div>
   </div>
 
@@ -59,8 +61,8 @@
       <ul class="credits">
         <li><b>사람 캐릭터</b> — MakeHuman 시스템 에셋 (MakeHuman 커뮤니티, MPFB2로 생성) · CC0</li>
         <li><b>캐릭터 동작</b> — Universal Animation Library (Quaternius) · CC0</li>
-        <li><b>총 모델</b> — CC0 Flat Guns West/East (Pichuliru, OpenGameArt) · CC0</li>
-        <li><b>실제 총소리</b> — The Free Firearm Sound Library (Ben Jaszczak 외) · CC0</li>
+        <li><b>총 모델 20종 · 총 선택 카드 그림</b> — CC0 Flat Guns West/East (Pichuliru, OpenGameArt) · CC0 (카드 그림은 이 모델을 게임에서 직접 렌더링)</li>
+        <li><b>실제 총소리</b> — The Free Firearm Sound Library (Ben Jaszczak 외: AR-15, AK-47, Mossberg, Ruger, Savage 녹음) · CC0</li>
         <li><b>탄착음·발소리·피격음</b> — Impact Sounds (Kenney) · CC0</li>
         <li><b>버튼 소리</b> — UI Audio (Kenney) · CC0</li>
         <li><b>점프·착지·무기 교체음</b> — Starter Kit FPS (Kenney) · 에셋 CC0</li>
@@ -78,6 +80,7 @@
   <div id="pause" class="overlay hidden">
     <div class="panel small">
       <p id="pauseText">클릭해서 게임 시작</p>
+      <button class="muteBtn" type="button">🔊 소리 켜짐 (M)</button>
     </div>
   </div>
 
@@ -87,6 +90,7 @@
       <div id="pickTitle">증강 선택</div>
       <div id="pickTimer"><i></i></div>
       <div id="cards"></div>
+      <div id="slotPick"></div>
       <button id="rerollBtn" class="secondary hidden">새로고침</button>
       <div id="pickWait" class="hidden">상대가 고르는 중...</div>
     </div>
@@ -125,7 +129,7 @@
       <div id="wname">돌격소총</div>
       <div><b id="ammo">30</b><span id="ammomax"> / 30</span></div>
       <div id="reloadHint"></div>
-      <div id="slots"><span data-w="rifle">1 소총</span><span data-w="sniper">2 저격총</span></div>
+      <div id="slots"></div>
     </div>
   </div>
 

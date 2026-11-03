@@ -10,7 +10,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { makeRifle, makeSniper } from './models.js';
+import { makeGun } from './models.js';
+import { GUNS, DEFAULT_LOADOUT } from './guns.js';
 
 export const HUMAN_SCALE = 0.96; // 조준 자세에서 눈높이가 게임 시점(1.6m)과 같도록 (모델 키 1.82m → 1.75m)
 
@@ -130,11 +131,15 @@ function buildClips(root, M) {
 
 // 클립별 한 걸음 주기 동안 이동하는 거리(m) — 발 미끄러짐을 줄이려고 재생 속도를 이동 속도에 맞춤
 const CYCLE = { walk: 1.29, jog: 2.33, sprint: 2.2 };
-// 총 위치 (가슴 뼈 기준, 캐릭터 공간: 앞 = -Z, 오른쪽 = +X)
-const GUN_OFS = { rifle: new THREE.Vector3(0.13, 0.22, -0.28), sniper: new THREE.Vector3(0.13, 0.22, -0.24) };
-// 총 위 손 위치 (총 모델 기준, 1인칭 팔과 같은 값)
-const GRIP = { rifle: new THREE.Vector3(0, -0.1, 0.12), sniper: new THREE.Vector3(0, -0.1, 0.14) };
-const FORE = { rifle: new THREE.Vector3(0, -0.04, -0.34), sniper: new THREE.Vector3(0, -0.06, -0.4) };
+// 총 위치 (가슴 뼈 기준, 캐릭터 공간: 앞 = -Z, 오른쪽 = +X). 총 기준점 = 총 윗면, 방아쇠 위치
+const GUN_OFS = {
+  long: new THREE.Vector3(0.13, 0.175, -0.28),     // 소총/샷건/저격총: 개머리판을 어깨에
+  smg: new THREE.Vector3(0.12, 0.17, -0.32),
+  pistol: new THREE.Vector3(0.07, 0.17, -0.5),     // 권총: 두 팔을 앞으로 뻗음
+};
+const ofsFor = cls => GUN_OFS[cls === 'pistol' ? 'pistol' : cls === 'smg' ? 'smg' : 'long'];
+// 모델이 오기 전 임시 손 위치 (총 기준)
+const GRIP = new THREE.Vector3(0, -0.12, 0.17), FORE = new THREE.Vector3(0, -0.06, -0.3);
 
 export class Human {
   constructor() {
@@ -153,12 +158,10 @@ export class Human {
       this.act[k] = a;
     }
     this.mount = new THREE.Group(); this.group.add(this.mount);
-    const s = 0.72; // 실제 총 길이(소총 약 0.85m)에 가깝게
-    this.guns = { rifle: makeRifle(), sniper: makeSniper() };
-    for (const g of Object.values(this.guns)) { g.scale.setScalar(s); this.mount.add(g); }
-    this.guns.sniper.visible = false;
+    this.guns = {};
     this.group.traverse(o => { if (o.isMesh && !o.isSkinnedMesh) { o.castShadow = true; } });
-    this.phase = 0; this.legYaw = 0; this.idleT = 0; this.deadT = -1; this.weapon = 'rifle';
+    this.phase = 0; this.legYaw = 0; this.idleT = 0; this.deadT = -1;
+    this.setWeapon(DEFAULT_LOADOUT[0]);
     this.restLocal = {}; for (const [k, b] of Object.entries(this.B)) this.restLocal[k] = b.quaternion.clone();
     this.armLen = {};
     for (const side of ['l', 'r']) {
@@ -166,7 +169,16 @@ export class Human {
     }
   }
 
-  setWeapon(w) { this.weapon = w; for (const k in this.guns) this.guns[k].visible = k === w; }
+  // 총은 처음 들 때 만듦. 크기 0.72 = 실제 총 길이에 가깝게
+  getGun(id) {
+    if (!this.guns[id]) { const g = makeGun(id); g.scale.setScalar(0.72); this.mount.add(g); this.guns[id] = g; }
+    return this.guns[id];
+  }
+  setWeapon(w) {
+    if (!GUNS[w]) w = DEFAULT_LOADOUT[0];
+    this.weapon = w; this.getGun(w);
+    for (const k in this.guns) this.guns[k].visible = k === w;
+  }
 
   // st: { speed, fN, sN, air, pitch, flinch, flinchHead, dead }
   update(dt, st) {
@@ -259,16 +271,15 @@ export class Human {
     this.group.worldToLocal(chest);
     const pr = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), st.pitch);
     // 어깨 높이를 축으로 돌려서 위/아래를 봐도 개머리판이 어깨에 붙어 있게
-    const o = GUN_OFS[this.weapon];
+    const gun = this.guns[this.weapon], o = ofsFor(gun.userData.cls);
     const pivot = chest.clone().add(new THREE.Vector3(o.x, o.y, 0));
     this.mount.position.copy(pivot).add(new THREE.Vector3(0, 0, o.z + flinch * 0.05).applyQuaternion(pr));
     this.mount.quaternion.copy(pr);
     this.mount.updateMatrixWorld(true);
 
     // ---- 팔: 두 관절 IK로 손을 손잡이/총열 덮개에 ----
-    const gun = this.guns[this.weapon];
-    const gripW = gun.localToWorld((gun.userData.grip || GRIP[this.weapon]).clone());
-    const foreW = gun.localToWorld((gun.userData.fore || FORE[this.weapon]).clone());
+    const gripW = gun.localToWorld((gun.userData.grip || GRIP).clone());
+    const foreW = gun.localToWorld((gun.userData.fore || FORE).clone());
     const gunQ = gun.getWorldQuaternion(new THREE.Quaternion());
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(gunQ);
     const gUp = new THREE.Vector3(0, 1, 0).applyQuaternion(gunQ);

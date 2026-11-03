@@ -133,3 +133,24 @@ button.link { background: none; border: none; color: #8fa3c0; text-decoration: u
 ul.credits { margin: 0; padding-left: 18px; color: #c9d1dd; font-size: 14px; line-height: 1.7; }
 ul.credits b { color: #fff; }
 #credits { z-index: 30; }
+
+/* ---- 총 선택 카드 ---- */
+.card.gun { width: 250px; height: 400px; --c: #7fd6ff; }
+.card.gun .gunimg { margin-top: 10px; width: 220px; height: 100px; background-position: center; background-size: contain; background-repeat: no-repeat; flex: none; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(127,214,255,.15); background-color: rgba(190, 215, 235, .55); }
+.card.gun .name { margin-top: 8px; }
+.card.gun .desc { flex: none; font-size: 13px; line-height: 1.45; min-height: 38px; }
+.card.gun .bars { width: 78%; display: grid; grid-template-columns: 52px 1fr; gap: 5px 8px; align-items: center; margin-top: 10px; font-size: 11px; color: #9fb0c0; text-align: left; }
+.card.gun .bars b { display: block; height: 6px; background: rgba(255,255,255,.1); border-radius: 3px; overflow: hidden; }
+.card.gun .bars b i { display: block; height: 100%; background: var(--c); }
+.card.gun .spec { margin-top: 10px; font-size: 12px; color: #c7d3d8; flex: 1; }
+.card.gun.sel { transform: translateY(-8px) scale(1.04); filter: drop-shadow(0 0 26px #7fd6ff); }
+.card.gun.sel::before { height: 5px; background: #fff; }
+#slotPick { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+#slotPick button { min-width: 200px; }
+#slotPick button:disabled { opacity: .35; cursor: default; }
+#slotPick .pass { background: #3a4150; }
+@media (max-width: 900px) { .card.gun { width: 200px; height: 360px; } .card.gun .gunimg { width: 180px; height: 80px; } }
+/* ---- 음소거 ---- */
+.muteBtn { background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.15); color: #e6ecf5; border-radius: 6px; font-size: 13px; padding: 5px 10px; cursor: pointer; }
+.muteBtn.off { color: #ff8a8a; }
+#pause .muteBtn { margin-top: 10px; }
