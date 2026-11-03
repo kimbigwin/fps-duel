@@ -486,5 +486,46 @@ export function updateEffects(dt) {
   }
 }
 
+// 나무 상자 부서짐: 메쉬를 치우고 나뭇조각을 흩뿌림
+const chunkGeo = new THREE.BoxGeometry(0.22, 0.06, 0.12);
+export function hideBox(i) {
+  const m = boxMeshes[i]; if (!m || !m.parent) return null;
+  scene.remove(m);
+  const k = mapMeshes.indexOf(m); if (k >= 0) mapMeshes.splice(k, 1);
+  const c = m.position.clone(), size = m.geometry.parameters;
+  for (let n = 0; n < 16; n++) {
+    const ch = new THREE.Mesh(chunkGeo, new THREE.MeshStandardMaterial({ color: n % 3 ? 0x8a5a2b : 0x6b4420, roughness: 0.9, transparent: true }));
+    ch.position.set(c.x + (Math.random() - 0.5) * size.width, c.y + (Math.random() - 0.3) * size.height, c.z + (Math.random() - 0.5) * size.depth);
+    ch.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    ch.scale.setScalar(0.7 + Math.random() * 1.2);
+    scene.add(ch);
+    effects.push({ obj: ch, life: 1.1 + Math.random() * 0.5, max: 1.6, vel: new THREE.Vector3((Math.random() - 0.5) * 6, 2 + Math.random() * 4, (Math.random() - 0.5) * 6), gravity: 14 });
+  }
+  puff(c, 0xa08a6a, 1.6, 0.9);
+  sparks(c, new THREE.Vector3(0, 1, 0), 0xc08040, 10);
+  return c;
+}
+// 수류탄 폭발 / 섬광탄 터짐
+export function explosion(p, kind) {
+  if (kind === 'frag') {
+    // 불덩이: 커지면서 0.5초 동안 사라짐
+    for (let n = 0; n < 5; n++) {
+      const f = new THREE.Sprite(new THREE.SpriteMaterial({ map: pickFx('flare', flashTex), color: new THREE.Color(2.4, 1.3 + Math.random() * 0.4, 0.5), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, rotation: Math.random() * 6 }));
+      f.position.copy(p).add(new THREE.Vector3((Math.random() - 0.5) * 1.2, 0.4 + Math.random() * 1.0, (Math.random() - 0.5) * 1.2));
+      f.scale.setScalar(2 + Math.random() * 1.5);
+      scene.add(f);
+      effects.push({ obj: f, life: 0.35 + Math.random() * 0.25, max: 0.6, grow: 5, dispose: false });
+    }
+    muzzleFlash(p.clone().add(new THREE.Vector3(0, 0.4, 0)), 4.5);
+    sparks(p, new THREE.Vector3(0, 1, 0), 0xffa040, 40);
+    for (let n = 0; n < 6; n++) puff(p.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, 0.3 + Math.random() * 1.2, (Math.random() - 0.5) * 2)), 0x55504a, 2.2 + Math.random(), 1.6);
+    bulletHole(new THREE.Vector3(p.x, 0.01, p.z), new THREE.Vector3(0, 1, 0));
+  } else {
+    muzzleFlash(p.clone().add(new THREE.Vector3(0, 0.3, 0)), 6);
+    sparks(p, new THREE.Vector3(0, 1, 0), 0xffffff, 24);
+    puff(p.clone().add(new THREE.Vector3(0, 0.4, 0)), 0xd8d8d8, 1.8, 1.4);
+  }
+}
+
 // 처음 맵 메쉬 (탄흔 목록이 위에서 만들어진 뒤에 호출)
 buildMapMeshes();

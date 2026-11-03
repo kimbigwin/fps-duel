@@ -93,10 +93,19 @@ export const RULES = {
 
 // 축 정렬 박스(AABB) 목록: 벽 + 장애물. 모든 파일이 같은 배열을 쓰고, 맵이 바뀌면 내용만 바뀜
 export function solidAABBs() { return SOLID_LIST; }
+// 부서지는 나무 상자 (나무 겉모양인 장애물)
+export const isWood = b => b && (b.kind === 'wood' || (!b.kind && b.h <= 2));
+export const CRATE_HP = 140;
+// 부서진 상자는 판정을 아주 먼 곳으로 치움 (번호는 그대로 유지)
+export function breakBox(i) {
+  const a = SOLID_LIST[i]; if (!a || a.broken) return false;
+  a.min = [0, -1000, 0]; a.max = [0, -999, 0]; a.broken = true;
+  return true;
+}
 // 맵 바꾸기. 바뀌었으면 true
-export function setMap(i) {
+export function setMap(i, force = false) {
   i = ((i % MAPS.length) + MAPS.length) % MAPS.length;
-  if (i === mapIndex) return false;
+  if (i === mapIndex && !force) return false;
   mapIndex = i;
   BOXES.length = 0; BOXES.push(...MAPS[i].boxes);
   SOLID_LIST.length = 0;
@@ -129,16 +138,30 @@ export function rayAABB(o, d, box) {
   return tmin;
 }
 
-// 플레이어 피격 판정용 박스 (발 위치 기준)
-export function playerHitboxes(p) {
+// 자세: cr = 앉기(0~1), ln = 기울이기(-1 왼쪽 ~ 1 오른쪽), yaw = 바라보는 방향
+export const POSE = { crouchDrop: 0.5, eyeDrop: 0.55, leanHead: 0.3, leanEye: 0.35, legFrac: 0.45, legMul: 0.75 };
+export const eyeHeight = (cr = 0) => PLAYER.eye - POSE.eyeDrop * cr;
+// 오른쪽 방향 (x, z)
+export const rightOf = yaw => [Math.cos(yaw), -Math.sin(yaw)];
+// 플레이어 피격 판정용 박스 (발 위치 기준). 앉으면 낮아지고, 기울이면 머리가 옆으로 감
+export function playerHitboxes(p, pose) {
   const r = PLAYER.hitRadius, hs = PLAYER.headHalf;
+  const cr = pose?.cr || 0, ln = pose?.ln || 0;
+  const bh = PLAYER.bodyHeight - POSE.crouchDrop * cr;
+  const [rx, rz] = rightOf(pose?.yaw || 0), hx = p[0] + rx * ln * POSE.leanHead, hz = p[2] + rz * ln * POSE.leanHead;
   return {
-    body: { min: [p[0] - r, p[1], p[2] - r], max: [p[0] + r, p[1] + PLAYER.bodyHeight, p[2] + r] },
+    body: { min: [p[0] - r, p[1], p[2] - r], max: [p[0] + r, p[1] + bh, p[2] + r] },
     head: {
-      min: [p[0] - hs, p[1] + PLAYER.bodyHeight, p[2] - hs],
-      max: [p[0] + hs, p[1] + PLAYER.bodyHeight + PLAYER.headSize, p[2] + hs],
+      min: [hx - hs, p[1] + bh, hz - hs],
+      max: [hx + hs, p[1] + bh + PLAYER.headSize, hz + hs],
     },
+    legTop: p[1] + bh * POSE.legFrac,   // 이 높이 아래 몸통 판정은 다리
   };
+}
+// 점이 장애물 안에 있는지 (기울일 때 카메라가 벽에 박히지 않게)
+export function insideSolid(x, y, z, pad = 0.15) {
+  for (const b of SOLID_LIST) if (x > b.min[0] - pad && x < b.max[0] + pad && y > b.min[1] && y < b.max[1] + pad && z > b.min[2] - pad && z < b.max[2] + pad) return true;
+  return false;
 }
 
 // 두 점 사이에 벽/장애물이 없는지

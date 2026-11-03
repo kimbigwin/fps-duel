@@ -57,3 +57,27 @@ export function stepMovement(ent, input, dt) {
   else ent.onGround = false;
   return blocked;
 }
+
+// ---------- 수류탄 ----------
+// 방장과 화면이 같은 계산으로 날아가는 길을 그림 (같은 시작값이면 같은 결과)
+export const NADE = {
+  frag: { name: '수류탄', key: 'G', fuse: 2.2, speed: 16, radius: 6.5, dmg: 115 },
+  flash: { name: '섬광탄', key: 'T', fuse: 1.5, speed: 16, radius: 24 },
+};
+const NG = 18, NSTEP = 1 / 120;
+function inBox(x, y, z) {
+  for (const b of SOLIDS) if (x > b.min[0] && x < b.max[0] && y > b.min[1] && y < b.max[1] && z > b.min[2] && z < b.max[2]) return true;
+  return false;
+}
+export function simNade(p0, v0, t) {
+  const p = [...p0], v = [...v0];
+  for (let s = 0; s < t; s += NSTEP) {
+    v[1] -= NG * NSTEP;
+    for (let k = 0; k < 3; k++) {
+      const old = p[k]; p[k] += v[k] * NSTEP;
+      if (k === 1 && p[1] < 0.06) { p[1] = 0.06; v[1] = Math.abs(v[1]) < 1 ? 0 : -v[1] * 0.35; v[0] *= 0.75; v[2] *= 0.75; continue; }
+      if (inBox(p[0], p[1], p[2])) { p[k] = old; v[k] = -v[k] * (k === 1 ? 0.35 : 0.45); if (k === 1) { v[0] *= 0.75; v[2] *= 0.75; } }
+    }
+  }
+  return p;
+}

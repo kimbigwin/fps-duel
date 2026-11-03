@@ -234,6 +234,23 @@ export class Human {
     }
     this.mixer.update(0);
 
+    // ---- 앉기: 허벅지를 앞으로, 종아리를 뒤로 굽히고 몸을 그만큼 내림 ----
+    this.crS = (this.crS || 0) + ((st.crouch || 0) - (this.crS || 0)) * (1 - Math.exp(-12 * dt));
+    this.lnS = (this.lnS || 0) + ((st.lean || 0) - (this.lnS || 0)) * (1 - Math.exp(-12 * dt));
+    const cr = this.crS;
+    this.body.position.y = -0.42 * cr;
+    if (cr > 0.01) {
+      this.group.updateMatrixWorld(true);
+      const gq0 = this.group.getWorldQuaternion(new THREE.Quaternion());
+      const bodyRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.body.getWorldQuaternion(new THREE.Quaternion()));
+      for (const side of ['l', 'r']) {
+        rotWorld(this.B['thigh_' + side], new THREE.Quaternion().setFromAxisAngle(bodyRight, -1.25 * cr));
+        rotWorld(this.B['calf_' + side], new THREE.Quaternion().setFromAxisAngle(bodyRight, 2.1 * cr));
+        rotWorld(this.B['foot_' + side], new THREE.Quaternion().setFromAxisAngle(bodyRight, -0.85 * cr));
+      }
+      void gq0;
+    }
+
     // ---- 상체: 조준 방향으로 비틀기 + 숙이기 ----
     this.group.updateMatrixWorld(true);
     const B = this.B;
@@ -253,6 +270,8 @@ export class Human {
     }
     const spines = ['spine_01', 'spine_02', 'spine_03'];
     const flinch = st.flinch || 0;
+    // 기울이기: 상체를 옆으로 (오른쪽 = +)
+    if (Math.abs(this.lnS) > 0.01) rotWorld(B.spine_01, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, -1).applyQuaternion(gq), 0.38 * this.lnS));
     for (const s of spines) {
       rotWorld(B[s], new THREE.Quaternion().setFromAxisAngle(up, this.legYaw / 3));
       rotWorld(B[s], new THREE.Quaternion().setFromAxisAngle(right, st.pitch * (st.pitch < 0 ? 0.04 : 0.1) + flinch * 0.1));

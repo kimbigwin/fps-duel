@@ -1,6 +1,7 @@
 // 게임 판정 로직: 방장(먼저 들어온 사람) 브라우저에서 실행됩니다.
 // 라운드제: 킬 1번 = 1라운드. 라운드마다 두 사람 모두 서로 안 보이는 먼 곳에서 다시 시작.
-import { RULES, solidAABBs, rayAABB, playerHitboxes, pickSpawnPair, faceCenter, setMap, currentMap, MAPS } from './map.js';
+import { RULES, solidAABBs, rayAABB, playerHitboxes, pickSpawnPair, faceCenter, setMap, currentMap, MAPS, eyeHeight, rightOf, POSE, BOXES, isWood, CRATE_HP, breakBox, lineOfSight } from './map.js';
+import { NADE, simNade } from './physics.js';
 import { statsFor, effWeapon, rollOptions, rollTier, hasCurse, stageInfo, RUN } from './augments.js';
 import { DEFAULT_LOADOUT, rangeMul, rollGuns } from './guns.js';
 import { newKit, rollGrade, rollLoot, cardPrice, ARMOR, ITEMS, MAX_ITEMS, REST } from './loot.js';
@@ -54,7 +55,7 @@ export class GameRoom {
   }
 
   resetBody(p, pos, bonusHp = 0) {
-    p.pos = pos;
+    p.pos = pos; p.cr = 0; p.ln = 0; p.nades = { frag: 1, flash: 1 };
     p.maxHp = p.stats.maxHp + (p.hpBonus || 0);
     p.hp = p.maxHp + bonusHp;
     p.dead = false;
@@ -138,7 +139,8 @@ export class GameRoom {
     const list = [...this.players.values()];
     // 맵: 대결은 라운드마다, 런은 스테이지마다 바뀜
     const mi = (this.mode === 'run' ? (this.stage || 1) - 1 : this.round) % MAPS.length;
-    setMap(mi);
+    setMap(mi, true);   // 부서진 상자도 되살림
+    this.crateHp = {};
     this.broadcast({ t: 'map', i: mi, name: MAPS[mi].name });
     const [a, b] = pickSpawnPair();
     list.forEach((p, i) => {
@@ -253,6 +255,57 @@ export class GameRoom {
     this.startRound();
   }
 
+  // 나무 상자 체력. 0이 되면 부서짐 (판정에서 빠짐)
+  hitCrate(i, dmg) {
+    const hp = (this.crateHp[i] ?? CRATE_HP) - dmg;
+    this.crateHp[i] = hp;
+    if (hp <= 0 && breakBox(i)) this.broadcast({ t: 'break', i });
+  }
+  // 수류탄 피해 (자기 수류탄에 죽으면 상대 점수)
+  nadeHurt(att, v, base, at) {
+    const now = nowS();
+    const { dmg, killed } = this.damage(att, v, base, false, now);
+    if (!dmg) return;
+    this.broadcast({ t: 'hit', target: v.id, by: att.id, hp: Math.max(0, v.hp), dmg, head: false, part: 'body', w: 'nade', from: at, at: [v.pos[0], v.pos[1] + 1, v.pos[2]] });
+    if (killed && this.phase === 'live') {
+      v.dead = true;
+      const killer = att === v ? ([...this.players.values()].find(p => p !== v) || att) : att;
+      killer.score++;
+      this.broadcast({ t: 'kill', killer: killer.id, victim: v.id, head: false, w: 'nade', self: att === v, scores: this.scores(), from: at });
+      this.endRound(killer, v);
+    } else if (killed) v.hp = v.maxHp;
+  }
+  explode(kind, pos, by, round, nid) {
+    this.broadcast({ t: 'boom', kind, p: pos, by, nid });
+    if (round !== this.round || !(this.phase === 'live' || this.phase === 'waiting')) return;
+    const N = NADE[kind], att = this.players.get(by);
+    if (kind === 'frag') {
+      // 나무 상자는 가까우면 부서짐
+      BOXES.forEach((b, i) => { if (isWood(b) && Math.hypot(Math.max(0, Math.abs(pos[0] - b.x) - b.w / 2), Math.max(0, Math.abs(pos[2] - b.z) - b.d / 2)) < 3) this.hitCrate(i, 999); });
+      for (const v of [...this.players.values()]) {
+        if (v.dead) continue;
+        const c = [v.pos[0], v.pos[1] + 0.9, v.pos[2]], dd = Math.hypot(c[0] - pos[0], c[1] - pos[1], c[2] - pos[2]);
+        if (dd > N.radius || !lineOfSight([pos[0], pos[1] + 0.25, pos[2]], c)) continue;
+        const vest = ARMOR.vest.red[v.kit?.armor?.vest | 0];
+        const base = N.dmg * Math.pow(1 - dd / N.radius, 1.2) * (1 - vest) * (v === att ? 0.6 : 1);
+        if (base >= 1 && att) this.nadeHurt(att, v, base, pos);
+      }
+    } else {
+      for (const v of this.players.values()) {
+        if (v.dead) continue;
+        const [rx, rz] = rightOf(v.yaw), lo = (v.ln || 0) * POSE.leanEye;
+        const eye = [v.pos[0] + rx * lo, v.pos[1] + eyeHeight(v.cr), v.pos[2] + rz * lo];
+        const dx = pos[0] - eye[0], dy = pos[1] - eye[1], dz = pos[2] - eye[2], dd = Math.hypot(dx, dy, dz);
+        if (dd > N.radius || !lineOfSight([pos[0], pos[1] + 0.25, pos[2]], eye)) continue;
+        // 바라보는 방향일수록 오래 눈이 멂
+        const cp = Math.cos(v.pitch || 0), f = [-Math.sin(v.yaw) * cp, Math.sin(v.pitch || 0), -Math.cos(v.yaw) * cp];
+        const dot = (f[0] * dx + f[1] * dy + f[2] * dz) / Math.max(dd, 0.01);
+        const dur = (dot > 0.5 ? 3.2 : dot > 0 ? 2.0 : 0.8) * (1 - 0.5 * dd / N.radius);
+        this.broadcast({ t: 'flash', id: v.id, dur: +dur.toFixed(2) });
+      }
+    }
+  }
+
   // 재장전 시간이 지났으면 탄창 채움 (네트워크 지연 여유 0.15초)
   finishReload(p, now) {
     if (p.reloadEnd && p.reloadEnd <= now + 0.15) { p.ammo[p.reloadW] = this.W(p, p.reloadW).mag; p.reloadEnd = 0; }
@@ -287,17 +340,17 @@ export class GameRoom {
   // 총알 1개 궤적: 벽(관통탄이면 첫 벽 너머까지)과 사람 판정
   trace(me, o, d) {
     const walls = [];
-    for (const b of SOLIDS) {
+    SOLIDS.forEach((b, bi) => {
       const t = rayAABB(o, d, b);
       if (t < Infinity) {
         // 박스를 빠져나가는 지점 = 반대 방향에서 들어오는 지점
         const far = o.map((v, i) => v + d[i] * 400);
         const back = rayAABB(far, d.map(v => -v), b);
-        walls.push({ t, exit: 400 - back });
+        walls.push({ t, exit: 400 - back, i: bi });
       }
-    }
+    });
     walls.sort((a, b) => a.t - b.t);
-    const firstWall = walls[0]?.t ?? 200;
+    const firstWall = walls[0]?.t ?? 200, wallIdx = walls[0]?.i ?? -1;
     let limit = firstWall, pierced = false;
     if (me.stats.pierce && walls.length) {
       const exit = walls[0].exit;
@@ -308,14 +361,16 @@ export class GameRoom {
     let hit = null, endT = firstWall;
     for (const p of this.players.values()) {
       if (p === me || p.dead) continue;
-      const hb = playerHitboxes(p.pos);
+      const hb = playerHitboxes(p.pos, { cr: p.cr, ln: p.ln, yaw: p.yaw });
       const th = rayAABB(o, d, hb.head), tb = rayAABB(o, d, hb.body);
       const t = Math.min(th, tb);
-      if (t < limit && (!hit || t < hit.t)) hit = { p, head: th <= tb, t, through: t > firstWall };
+      // 부위: 머리 / 몸통 / 다리 (몸통 판정의 아래쪽)
+      const head = th <= tb, leg = !head && o[1] + d[1] * t < hb.legTop;
+      if (t < limit && (!hit || t < hit.t)) hit = { p, head, leg, t, through: t > firstWall };
     }
     if (hit) endT = hit.t;
     else if (pierced) endT = limit;
-    return { hit, end: o.map((v, i) => v + d[i] * endT), pierced: pierced && (hit ? hit.through : true), firstWall };
+    return { hit, end: o.map((v, i) => v + d[i] * endT), pierced: pierced && (hit ? hit.through : true), firstWall, wallIdx };
   }
 
   message(id, m) {
@@ -325,8 +380,9 @@ export class GameRoom {
     if (m.t === 'state' && !me.dead) {
       if (!Array.isArray(m.p) || m.p.length !== 3 || !m.p.every(Number.isFinite)) return;
       me.pos = m.p; me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
+      me.cr = Math.max(0, Math.min(1, +m.cr || 0)); me.ln = Math.max(-1, Math.min(1, +m.ln || 0));
       me.w = me.loadout.includes(m.w) ? m.w : me.loadout[0];
-      this.players.forEach(p => p !== me && p.send({ t: 'state', id: me.id, p: me.pos, yaw: me.yaw, pitch: me.pitch, w: me.w, ads: !!m.ads, air: !!m.air }));
+      this.players.forEach(p => p !== me && p.send({ t: 'state', id: me.id, p: me.pos, yaw: me.yaw, pitch: me.pitch, w: me.w, ads: !!m.ads, air: !!m.air, cr: me.cr, ln: me.ln, sl: !!m.sl }));
     }
 
     if (m.t === 'pick' && this.phase === 'pick' && this.pickers?.has(me.id) && !me.gunOpts && me.pickOpts?.includes(m.id)) {
@@ -400,6 +456,19 @@ export class GameRoom {
     }
 
     // 재장전: 방장이 탄약 수를 관리
+    // 수류탄 / 섬광탄 던지기 (라운드마다 1개씩)
+    if (m.t === 'throw' && !me.dead && NADE[m.kind] && me.nades?.[m.kind] > 0 && (this.phase === 'live' || this.phase === 'waiting')
+      && Array.isArray(m.dir) && m.dir.length === 3 && m.dir.every(Number.isFinite) && !(me.usingUntil > nowS())) {
+      me.nades[m.kind]--;
+      const N = NADE[m.kind], l = Math.hypot(...m.dir) || 1, d = m.dir.map(v => v / l);
+      const [rx, rz] = rightOf(me.yaw), lo = (me.ln || 0) * POSE.leanEye;
+      const p0 = [me.pos[0] + rx * lo + d[0] * 0.4, me.pos[1] + eyeHeight(me.cr) - 0.1 + d[1] * 0.4, me.pos[2] + rz * lo + d[2] * 0.4];
+      const v0 = [d[0] * N.speed, d[1] * N.speed + 2.5, d[2] * N.speed];
+      const nid = (this.nadeSeq = (this.nadeSeq || 0) + 1);
+      this.broadcast({ t: 'nade', nid, by: me.id, kind: m.kind, p: p0, v: v0, nades: me.nades });
+      const round = this.round, end = simNade(p0, v0, N.fuse);
+      this.later(N.fuse, () => this.explode(m.kind, end, me.id, round, nid));
+    }
     if (m.t === 'reload' && !me.dead && me.loadout.includes(m.w)) {
       const now = nowS();
       this.finishReload(me, now);
@@ -422,7 +491,9 @@ export class GameRoom {
       const lastFive = me.stats.lastFive && me.ammo[wname] <= me.stats.lastFive;
       me.ammo[wname]--;
 
-      const o = [me.pos[0], me.pos[1] + 1.6, me.pos[2]];
+      // 눈 위치: 앉으면 낮게, 기울이면 옆으로
+      const [rx, rz] = rightOf(me.yaw), lo = (me.ln || 0) * POSE.leanEye;
+      const o = [me.pos[0] + rx * lo, me.pos[1] + eyeHeight(me.cr), me.pos[2] + rz * lo];
       let d = m.dir;
       if (!Array.isArray(d) || d.length !== 3 || !d.every(Number.isFinite)) return;
       const len = Math.hypot(...d) || 1; d = d.map(v => v / len);
@@ -443,28 +514,32 @@ export class GameRoom {
       const rays = dirs.map(dd => this.trace(me, o, dd));
       this.broadcast({ t: 'shot', id: me.id, o, w: wname, q: W.quiet ? 1 : 0, rays: rays.map(r => ({ end: r.end, hit: !!r.hit, pierced: r.pierced, wallT: r.firstWall })) });
 
+      // 나무 상자에 맞은 총알은 상자 체력을 깎음
+      for (const r of rays) if ((!r.hit || r.hit.through) && r.wallIdx >= 0 && isWood(BOXES[r.wallIdx])) this.hitCrate(r.wallIdx, W.body * rangeMul(W, r.firstWall));
       // 맞은 사람별로 모아서 한 번에 판정 (샷건 여러 알)
       const byVictim = new Map();
       for (const r of rays) {
         if (!r.hit) continue;
         // 등급 데미지 × 맞은 사람 방어구 (머리=헬멧, 몸=조끼)
         const arm = r.hit.p.kit?.armor || {};
-        let base = (r.hit.head ? W.head * me.stats.headMul : W.body) * rangeMul(W, r.hit.t) * W.dmgMul
-          * (1 - (r.hit.head ? ARMOR.helmet.red[arm.helmet | 0] : ARMOR.vest.red[arm.vest | 0]));
+        // 다리는 75% 데미지, 조끼는 다리를 막지 못함
+        let base = (r.hit.head ? W.head * me.stats.headMul : W.body * (r.hit.leg ? POSE.legMul : 1)) * rangeMul(W, r.hit.t) * W.dmgMul
+          * (1 - (r.hit.head ? ARMOR.helmet.red[arm.helmet | 0] : r.hit.leg ? 0 : ARMOR.vest.red[arm.vest | 0]));
         if (lastFive) base *= 2;
         if (r.hit.through) base *= me.stats.pierce;
-        const e = byVictim.get(r.hit.p) || { base: 0, head: false, at: r.end, through: false, n: 0 };
-        e.base += base; e.head ||= r.hit.head; e.through ||= r.hit.through; e.n++;
+        const e = byVictim.get(r.hit.p) || { base: 0, head: false, at: r.end, through: false, n: 0, legs: 0 };
+        e.base += base; e.head ||= r.hit.head; e.through ||= r.hit.through; e.n++; if (r.hit.leg) e.legs++;
         if (r.hit.head) e.at = r.end;
         byVictim.set(r.hit.p, e);
       }
       for (const [v, e] of byVictim) {
         const { dmg, killed } = this.damage(me, v, e.base, false, now, W.syn);
-        this.broadcast({ t: 'hit', target: v.id, by: me.id, hp: Math.max(0, v.hp), dmg, head: e.head, w: wname, from: o, at: e.at, through: e.through, pellets: e.n });
+        const part = e.head ? 'head' : e.legs === e.n ? 'leg' : 'body';
+        this.broadcast({ t: 'hit', target: v.id, by: me.id, hp: Math.max(0, v.hp), dmg, head: e.head, part, w: wname, from: o, at: e.at, through: e.through, pellets: e.n });
         if (killed && this.phase === 'live') {
           v.dead = true;
           me.score++;
-          this.broadcast({ t: 'kill', killer: me.id, victim: v.id, head: e.head, w: wname, scores: this.scores(), from: o });
+          this.broadcast({ t: 'kill', killer: me.id, victim: v.id, head: e.head, part, w: wname, scores: this.scores(), from: o, at: e.at });
           this.endRound(me, v);
         } else if (killed) {
           // 대기 중(상대 없음)에는 그냥 체력만 회복

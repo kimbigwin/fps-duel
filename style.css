@@ -214,3 +214,35 @@ ul.credits b { color: #fff; }
 .rr-grid { display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 14px; text-align: left; }
 .rr-grid span { color: #9fb0c0; } .rr-grid b { color: #fff; }
 #statsBody { margin: 10px 0 16px; }
+
+/* ---------- 헤드샷·처치 연출 ---------- */
+.dmg.leg { color: #b9c3cf; font-size: 17px; }
+.pop { position: absolute; left: calc(50% + 34px); top: calc(50% - 30px); font-size: 16px; font-weight: 900; letter-spacing: 1px; color: #ffd34d; text-shadow: 0 2px 4px #000; animation: popIn .9s ease-out forwards; pointer-events: none; }
+@keyframes popIn { 0% { transform: scale(1.6); opacity: 0; } 15% { transform: scale(1); opacity: 1; } 75% { opacity: 1; } 100% { transform: translateY(-14px); opacity: 0; } }
+#killStamp { position: absolute; left: 50%; top: 36%; transform: translate(-50%, -50%); font-size: 42px; font-weight: 900; letter-spacing: 6px; color: #fff; opacity: 0; pointer-events: none; text-shadow: 0 0 18px rgba(255, 80, 60, .8), 0 3px 6px #000; }
+#killStamp.show { animation: stamp 1.3s ease-out forwards; }
+#killStamp.head { color: #ffd34d; text-shadow: 0 0 22px rgba(255, 200, 40, .9), 0 3px 6px #000; }
+@keyframes stamp { 0% { transform: translate(-50%, -50%) scale(2.4); opacity: 0; } 12% { transform: translate(-50%, -50%) scale(1); opacity: 1; } 70% { opacity: 1; } 100% { transform: translate(-50%, -60%) scale(1); opacity: 0; } }
+#blind { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 5; }
+
+/* ---------- 조준점 꾸미기 ---------- */
+#crosshair i { background: var(--xc, #fff); }
+#crosshair[data-style="dot"] i { display: none; }
+#crosshair[data-style="dot"]::after, #crosshair[data-style="both"]::after { content: ''; position: absolute; left: -2px; top: -2px; width: 4px; height: 4px; border-radius: 50%; background: var(--xc, #fff); box-shadow: 0 0 2px #000; }
+#crosshair.sg::before { border-color: var(--xc, rgba(255,255,255,.85)); }
+#crosshair.sg::after { background: var(--xc, #fff); }
+/* ---------- 꾸미기 · 업적 화면 ---------- */
+#custom .panel { max-height: 92vh; overflow-y: auto; }
+#customBody h3 { margin: 14px 0 8px; font-size: 15px; color: #c9d1dd; text-align: left; }
+.opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.opts .opt { display: flex; align-items: center; gap: 6px; padding: 8px 12px; min-width: 0; font-size: 14px; background: #2a3040; flex-direction: row; flex-wrap: wrap; }
+.opts .opt.on { background: #ff8a3d; color: #111; }
+.opts .opt.locked { opacity: .5; cursor: default; }
+.opts .opt small { width: 100%; font-size: 11px; font-weight: 600; text-align: left; }
+.opts .sw { width: 14px; height: 14px; border-radius: 3px; display: inline-block; box-shadow: 0 0 0 1px rgba(255,255,255,.3); }
+.achs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; text-align: left; }
+.ach { background: rgba(255,255,255,.05); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+.ach b { font-size: 14px; } .ach span { font-size: 12px; color: #9fb0c0; } .ach em { font-style: normal; font-size: 12px; color: #ffd166; }
+.ach.ok { box-shadow: inset 3px 0 0 #6dff9c; } .ach.ok em { color: #6dff9c; }
+.toast { position: fixed; right: 20px; top: 20px; z-index: 50; background: rgba(10, 14, 22, .92); border: 1px solid #ffd166; border-radius: 10px; padding: 12px 18px; font-size: 15px; color: #fff; animation: cardIn .4s ease-out; box-shadow: 0 0 18px rgba(255, 209, 102, .35); }
+.toast small { color: #ffd166; }

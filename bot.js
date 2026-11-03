@@ -110,12 +110,13 @@ export class Bot {
       this.ent.vel = { x: 0, y: 0, z: 0 };
       this.yaw = m.yaw; this.pitch = 0; this.dead = false;
       this.ammo = this.fullAmmo();
-      this.reloadUntil = 0; this.seeTime = 0; this.path = []; this.pendingReload = null;
+      this.reloadUntil = 0; this.seeTime = 0; this.path = []; this.pendingReload = null; this.blindUntil = 0; this.nextNade = performance.now() / 1000 + 6 + Math.random() * 6;
       const st = this.stage();
       if (st) this.cfg = levelCfg(st.level);
     }
     if (m.t === 'augs' && m.id === this.id) { this.augs = m.augs; this.stats = statsFor(m.augs); }
     if (m.t === 'loadout' && m.id === this.id) { this.kit = m.kit; this.loadout = m.loadout; this.weapon = this.loadout[0]; this.ammo = this.fullAmmo(); this.pendingReload = null; }
+    if (m.t === 'flash' && m.id === this.id) this.blindUntil = performance.now() / 1000 + m.dur;
     if (m.t === 'buff' && m.id === this.id) { this.buffUntil = performance.now() / 1000 + m.dur; this.buffSpeed = m.speed; }
     if (m.t === 'phase' && m.phase === 'live') this.waitUntil = performance.now() / 1000 + 0.25;
     if (m.t === 'kill' && m.victim === this.id) this.dead = true;
@@ -144,7 +145,15 @@ export class Bot {
     if (t) {
       const tp = { x: t.pos[0], y: t.pos[1], z: t.pos[2] };
       const dist = Math.hypot(tp.x - me.x, tp.z - me.z);
-      const visible = lineOfSight(eye, [tp.x, tp.y + 1.6, tp.z]) || lineOfSight(eye, [tp.x, tp.y + 0.9, tp.z]);
+      // 섬광탄에 눈이 멀면 못 봄
+      const visible = now > (this.blindUntil || 0) && (lineOfSight(eye, [tp.x, tp.y + 1.6, tp.z]) || lineOfSight(eye, [tp.x, tp.y + 0.9, tp.z]));
+      // 안 보이는 상대가 가까우면 가끔 수류탄 (거리에 맞춰 각도)
+      const selfN = this.room.players.get(this.id)?.nades;
+      if (!visible && dist > 7 && dist < 17 && selfN?.frag > 0 && now > (this.nextNade || 0) && this.room.mode === 'duel') {
+        this.nextNade = now + 8;
+        const ang = 0.5 * Math.asin(Math.min(1, dist * 18 / (16 * 16))), yaw = Math.atan2(-(tp.x - me.x), -(tp.z - me.z));
+        this.room.message(this.id, { t: 'throw', kind: 'frag', dir: [-Math.sin(yaw) * Math.cos(ang), Math.sin(ang), -Math.cos(yaw) * Math.cos(ang)] });
+      }
 
       // 거리에 따라 무기 선택: 가까우면 1번 칸, 멀면 2번 칸 (보스는 무기 고정)
       const [near, far] = this.loadout;
@@ -163,7 +172,7 @@ export class Bot {
         this.path = [];
         // 조준: 목표 방향으로 서서히 회전
         if (!this.aimH) this.aimH = Math.random() < this.cfg.headChance ? 1.65 : 1.05;
-        const aimH = this.aimH;
+        const aimH = this.aimH - (t.cr || 0) * 0.5;   // 앉은 상대는 낮게 조준
         const dx = tp.x - me.x, dy = tp.y + aimH - eye[1], dz = tp.z - me.z;
         const wantYaw = Math.atan2(-dx, -dz);
         const wantPitch = Math.atan2(dy, Math.hypot(dx, dz));

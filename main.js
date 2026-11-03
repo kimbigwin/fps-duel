@@ -1,12 +1,12 @@
 import * as THREE from 'three';
-import { PLAYER, RULES, MAPS, setMap } from './map.js';
+import { PLAYER, RULES, MAPS, setMap, eyeHeight, rightOf, POSE, insideSolid, breakBox } from './map.js';
 import { GUNS, DEFAULT_LOADOUT, CLASSES, gunBars } from './guns.js';
 import { GameRoom } from './game.js';
 import { Bot } from './bot.js';
-import { stepMovement, MOVE } from './physics.js';
+import { stepMovement, MOVE, NADE, simNade } from './physics.js';
 import {
   renderer, scene, camera, viewScene, composer, vignette, resize,
-  tracer, sparks, puff, blood, bulletHole, surfaceAt, updateEffects, flashTex, muzzleTex, flareTex, muzzleFlash, buildMapMeshes, setSky,
+  tracer, sparks, puff, blood, bulletHole, surfaceAt, updateEffects, flashTex, muzzleTex, flareTex, muzzleFlash, buildMapMeshes, setSky, hideBox, explosion,
 } from './world.js';
 import { makeGun, makeSoldier, setXray, preloadGuns } from './models.js';
 import { loadHuman, humanReady, Human } from './character.js';
@@ -22,6 +22,8 @@ const me = {
   reloadStart: 0, reloadUntil: 0, switchUntil: 0, lastFire: 0, ads: false, adsT: 0, boltT: 0, bloom: 0,
   doubleUsed: false, dashReadyAt: 0, dashUntil: 0, dashDir: null, lastShiftTap: 0, streak: 0,
   ghostUntil: 0, invulnUntil: 0,
+  nades: { frag: 1, flash: 1 }, blindUntil: 0, blindLen: 1, throwT: 0,
+  crT: 0, leanT: 0, slideUntil: 0, slideDir: null, nextSlide: 0,
   kit: newKit(), gold: 0, usingUntil: 0, usingItem: null, usingLen: 1, buffUntil: 0, buffSpeed: 1,
 };
 // id -> { name, mesh, target, yaw, pitch, w, dead, deadT, speed, augs, flinch, fallSign, ghostUntil, revealUntil, air }
@@ -45,7 +47,7 @@ const ui = {
   banner: $('banner'), dmg: $('dmgLayer'), opAugs: $('opAugs'), myAugs: $('myAugs'), cool: $('cooldowns'),
   pick: $('pick'), pickTitle: $('pickTitle'), pickTimer: $('pickTimer').firstElementChild, cards: $('cards'),
   reroll: $('rerollBtn'), pickWait: $('pickWait'), slotPick: $('slotPick'),
-  kit: $('kit'), useBar: $('useBar'), killcam: $('killcamTag'), roundRes: $('roundRes'),
+  kit: $('kit'), useBar: $('useBar'), killStamp: $('killStamp'), blind: $('blind'), killcam: $('killcamTag'), roundRes: $('roundRes'),
   runEnd: $('runEnd'), runEndTitle: $('runEndTitle'), runEndText: $('runEndText'), runEndAugs: $('runEndAugs'),
 };
 
@@ -85,6 +87,16 @@ const FLAME = { ar: 0.42, br: 0.48, dmr: 0.5, smg: 0.36, pistol: 0.28, sg: 0.6, 
 let flashUntil = 0, flashFrames = 0;
 // 화면 반동(보이는 것만, 실제 조준은 me.pitch): 쏠 때 위로 튀었다가 빨리 돌아옴
 let camKick = 0, camKickYaw = 0, firePunch = 0;
+// 연사할 때 좌우로 끌리는 정해진 무늬 (+ = 오른쪽). 처음 몇 발은 거의 위로만
+const RECOIL_PAT = {
+  ar: [0, 0.1, 0.25, 0.4, 0.3, -0.1, -0.45, -0.6, -0.4, 0.1, 0.5, 0.7, 0.4, -0.2],
+  br: [0, 0.2, -0.2, 0.35, -0.35, 0.4, -0.4],
+  dmr: [0, 0.3, -0.25, 0.35, -0.3],
+  smg: [0, 0.15, -0.15, 0.3, 0.1, -0.3, -0.1, 0.35, 0.2, -0.4, 0.1, 0.45, -0.3, -0.1, 0.4, -0.45],
+  pistol: [0, 0.2, -0.15, 0.3, -0.25],
+  sg: [0, 0.4, -0.4],
+  sniper: [0, 0.3],
+};
 const KICK = { ar: 0.012, br: 0.02, dmr: 0.028, smg: 0.009, pistol: 0.02, sg: 0.05, sniper: 0.06 };
 const SHAKE = { ar: 0.22, br: 0.3, dmr: 0.32, smg: 0.18, pistol: 0.2, sg: 0.55, sniper: 0.6 };
 const worldFlash = new THREE.PointLight(0xffb060, 0, 12, 2); scene.add(worldFlash);
@@ -276,6 +288,16 @@ const sfx = {
   },
   fanfare() { [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) => tone(f, 0.3, 0.2, i * 0.09, 'square')); },
   fail() { [392, 349, 311, 262].forEach((f, i) => tone(f, 0.4, 0.2, i * 0.18, 'sawtooth')); },
+  throwN() { noiseBurst(0.12, 'bandpass', 1200, 0.3, 2); },
+  // 폭발: 가까울수록 크게
+  boom(kind, d) {
+    const k = Math.max(0.15, 1 - d / 60);
+    if (kind === 'frag') { thump(70, 22, 0.9, 1.3 * k, 0, 0.6); noiseBurst(1.1, 'lowpass', 1100, 1.0 * k, 3); play('metalh', { gain: 0.6 * k, rate: 0.6 }); }
+    else { noiseBurst(0.18, 'highpass', 2600, 0.9 * k, 6); thump(160, 60, 0.15, 0.7 * k); }
+  },
+  // 섬광탄 이명
+  ring(dur) { tone(3100, Math.min(3, dur), 0.08, 0, 'sine'); },
+  slide() { noiseBurst(0.45, 'lowpass', 900, 0.35, 2); },
   dash() { noiseBurst(0.25, 'bandpass', 900, 0.4, 2); },
   jump2() { tone(500, 0.12, 0.12, 0, 'sine'); tone(800, 0.12, 0.1, 0.04, 'sine'); },
   ghost() { tone(300, 0.5, 0.15, 0, 'sine'); tone(450, 0.5, 0.1, 0.05, 'sine'); },
@@ -312,6 +334,7 @@ function updateKit() {
   const k = me.kit, a = [];
   if (k.armor.helmet) a.push(`<span class="arm">헬멧 Lv${k.armor.helmet}</span>`);
   if (k.armor.vest) a.push(`<span class="arm">조끼 Lv${k.armor.vest}</span>`);
+  for (const id in NADE) a.push(`<span class="item${me.nades[id] ? '' : ' none'}"><kbd>${NADE[id].key}</kbd>${NADE[id].name} ${me.nades[id] | 0}</span>`);
   for (const id in ITEMS) a.push(`<span class="item${k.items[id] ? '' : ' none'}"><kbd>${ITEMS[id].key}</kbd>${ITEMS[id].name} ${k.items[id] | 0}</span>`);
   if (gameMode === 'run') a.push(`<span class="gold">${me.gold} G</span>`);
   const html = a.join('');
@@ -351,15 +374,23 @@ function banner(html, cls = '') {
   ui.banner.innerHTML = html; ui.banner.className = 'show ' + cls;
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+const weaponName = w => w === 'nade' ? '수류탄' : GUNS[w]?.name ?? '';
 const nameOf = id => id === me.id ? '나' : others.get(id)?.name ?? '???';
 
 // 데미지 숫자: 맞은 지점을 화면 좌표로 바꿔서 띄움
-function damageNumber(at, dmg, head, big) {
+// 조준점 옆에 잠깐 뜨는 글자 (헤드샷 등)
+function popText(text, cls = '') {
+  const d = document.createElement('div');
+  d.className = 'pop ' + cls; d.textContent = text;
+  ui.hud.appendChild(d);
+  setTimeout(() => d.remove(), 900);
+}
+function damageNumber(at, dmg, head, big, leg) {
   const v = new THREE.Vector3(...at); v.y += 0.2;
   v.project(camera);
   if (v.z > 1) return;
   const d = document.createElement('div');
-  d.className = 'dmg' + (head ? ' head' : '') + (big ? ' big' : '');
+  d.className = 'dmg' + (head ? ' head' : '') + (big ? ' big' : '') + (leg ? ' leg' : '');
   d.textContent = dmg;
   d.style.left = ((v.x * 0.5 + 0.5) * innerWidth + (Math.random() - 0.5) * 30) + 'px';
   d.style.top = ((-v.y * 0.5 + 0.5) * innerHeight) + 'px';
@@ -543,7 +574,7 @@ function resetLoadout() {
   me.ammo = Object.fromEntries(me.loadout.map(id => [id, W(id).mag]));
   me.weapon = me.loadout[me.slot] || me.loadout[0]; me.burstLeft = 0;
   me.reloadStart = 0; me.reloadUntil = 0; me.switchUntil = 0; me.ads = false; me.boltT = 0; me.pendingReload = null;
-  me.dashReadyAt = 0; me.doubleUsed = false; me.ghostUntil = 0; me.invulnUntil = 0; me.usingUntil = 0; me.buffUntil = 0;
+  me.dashReadyAt = 0; me.doubleUsed = false; me.ghostUntil = 0; me.invulnUntil = 0; me.usingUntil = 0; me.buffUntil = 0; me.nades = { frag: 1, flash: 1 }; me.blindUntil = 0;
   ui.reload.textContent = '';
   updateAmmo();
 }
@@ -805,6 +836,27 @@ function onMessage(m) {
   switch (m.t) {
     case 'map':
       applyMap(m.i); break;
+    case 'nade': {
+      if (m.by === me.id) { me.nades = m.nades; updateKit(); }
+      const mesh = new THREE.Mesh(nadeGeo[m.kind], nadeMat[m.kind]); mesh.castShadow = true; scene.add(mesh);
+      nadeMeshes.set(m.nid, { mesh, kind: m.kind, p0: m.p, v0: m.v, start: nowS() });
+      sfx.throwN(); break;
+    }
+    case 'boom': {
+      const n = nadeMeshes.get(m.nid); if (n) { scene.remove(n.mesh); nadeMeshes.delete(m.nid); }
+      const p = new THREE.Vector3(...m.p), d = p.distanceTo(camera.position);
+      explosion(p, m.kind);
+      sfx.boom(m.kind, d);
+      if (m.kind === 'frag') { shake = Math.max(shake, 1.4 * Math.max(0, 1 - d / 22)); worldFlash.intensity = 120; worldFlash.position.copy(p).y += 1; flashUntil = nowS() + 0.08; flashFrames = 3; }
+      break;
+    }
+    case 'flash':
+      if (m.id === me.id) { me.blindUntil = nowS() + m.dur; me.blindLen = m.dur; sfx.ring(m.dur); }
+      break;
+    case 'break':
+      breakBox(m.i);
+      { const c = hideBox(m.i); if (c) playAt('woodh', c, 1); }
+      break;
     case 'full':
       lostConnection('방이 가득 찼습니다 (최대 2명). 다른 방 코드를 써 주세요.');
       peer?.destroy(); break;
@@ -861,7 +913,7 @@ function onMessage(m) {
       break;
     case 'state': {
       const o = others.get(m.id); if (!o) break;
-      o.target.set(...m.p); o.yaw = m.yaw; o.pitch = m.pitch; o.air = !!m.air;
+      o.target.set(...m.p); o.yaw = m.yaw; o.pitch = m.pitch; o.air = !!m.air; o.cr = +m.cr || 0; o.ln = +m.ln || 0;
       if (m.w && m.w !== o.w && GUNS[m.w]) { o.w = m.w; o.mesh.userData.setWeapon(m.w); }
       break;
     }
@@ -920,7 +972,8 @@ function onMessage(m) {
           flashClass(ui.hit, killing ? 400 : 160, 'head', !!m.head);
           ui.hit.classList.toggle('kill', killing);
           sfx.hit(m.head);
-          if (m.dmg > 0 && m.at) damageNumber(m.at, m.dmg, m.head, m.dmg >= 80);
+          if (m.dmg > 0 && m.at) damageNumber(m.at, m.dmg, m.head, m.dmg >= 80, m.part === 'leg');
+          if (m.head) popText(killing ? '헤드샷 처치' : '헤드샷', 'hs');
           ui.cross.classList.add('hitpulse'); clearTimeout(ui.cross._t); ui.cross._t = setTimeout(() => ui.cross.classList.remove('hitpulse'), 120);
           recoilKick = Math.max(recoilKick, 0.4);
         }
@@ -972,7 +1025,7 @@ function onMessage(m) {
       break;
     case 'kill': {
       scores = m.scores; updateScore();
-      feed(`${nameOf(m.killer)}  [${GUNS[m.w]?.name ?? ''}${m.head ? ' · 헤드샷' : ''}]  ${nameOf(m.victim)}`);
+      feed(m.self ? `${nameOf(m.victim)} 자기 수류탄에 쓰러짐` : `${nameOf(m.killer)}  [${weaponName(m.w)}${m.head ? ' · 헤드샷' : ''}]  ${nameOf(m.victim)}`);
       recordKillStats(m);
       setTimeout(() => showRoundResult(m), 450);
       if (m.victim === me.id) {
@@ -981,6 +1034,8 @@ function onMessage(m) {
         ui.center.className = ''; ui.center.innerHTML = gameMode === 'run' ? '사망' : `라운드 패배<br><small style="font-size:18px">${nameOf(m.killer)} ${m.scores[m.killer]}점</small>`;
       } else {
         const o = others.get(m.victim);
+        // 헤드샷 처치: 머리에서 피가 크게 튐
+        if (m.head && m.at) { const hp = new THREE.Vector3(...m.at); blood(hp); blood(hp); sparks(hp, new THREE.Vector3(0, 1, 0), 0xaa1010, 14); }
         if (o) {
           o.dead = true; o.deadT = 0;
           // 쏜 사람 반대쪽으로 쓰러짐
@@ -990,6 +1045,8 @@ function onMessage(m) {
         }
         if (m.killer === me.id) {
           sfx.kill(); killPunch = 1;
+          ui.killStamp.className = ''; void ui.killStamp.offsetWidth; ui.killStamp.className = 'show' + (m.head ? ' head' : '');
+          ui.killStamp.textContent = m.head ? '헤드샷!' : '처치';
           ui.center.className = 'count';
           ui.center.textContent = gameMode === 'run' ? (m.head ? '헤드샷!' : '처치!') : (m.head ? '헤드샷 · 라운드 승리' : '라운드 승리');
           setTimeout(() => { if (!matchOver && !me.dead && phase !== 'live') { ui.center.textContent = ''; ui.center.className = ''; } }, 1500);
@@ -1115,6 +1172,9 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyR') startReload();
   if (e.code === 'Digit1') switchWeapon(0);
   if (e.code === 'Digit2') switchWeapon(1);
+  if (e.code === 'KeyC' && first) trySlide();
+  if (e.code === 'KeyG' && first) throwNade('frag');
+  if (e.code === 'KeyT' && first) throwNade('flash');
   if (first) for (const id in ITEMS) if (e.code === 'Digit' + ITEMS[id].key) useItem(id);
 });
 // 소모품: 방장이 개수·시간을 판정. 쓰는 중엔 사격·재장전 불가
@@ -1130,6 +1190,36 @@ const nowS = () => performance.now() / 1000;
 const canAct = () => phase === 'live' || phase === 'waiting';
 function busy() { const t = nowS(); return t < me.reloadUntil || t < me.switchUntil || t < me.usingUntil; }
 
+// G 수류탄 / T 섬광탄: 보는 방향으로 던짐 (라운드마다 1개씩, 방장이 판정)
+function throwNade(kind) {
+  if (me.dead || !canAct() || !(me.nades[kind] > 0) || nowS() < me.usingUntil || nowS() < me.throwT + 0.6) return;
+  const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
+  me.throwT = nowS();
+  net({ t: 'state', p: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z], yaw: me.yaw, pitch: me.pitch, w: me.weapon, ads: false, air: !me.ent.onGround, cr: +me.crT.toFixed(2), ln: +me.leanT.toFixed(2) });
+  net({ t: 'throw', kind, dir: dir.toArray() });
+}
+// 날아가는 수류탄 (방장과 같은 계산으로 위치를 그림)
+const nadeMeshes = new Map();
+const nadeGeo = { frag: new THREE.SphereGeometry(0.07, 10, 8), flash: new THREE.CylinderGeometry(0.045, 0.045, 0.15, 10) };
+const nadeMat = { frag: new THREE.MeshStandardMaterial({ color: 0x3d4a2e, roughness: 0.6, metalness: 0.3 }), flash: new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.4, metalness: 0.6 }) };
+function updateNades() {
+  const now = nowS();
+  for (const [id, n] of nadeMeshes) {
+    const t = Math.min(now - n.start, NADE[n.kind].fuse);
+    const q = simNade(n.p0, n.v0, t);
+    n.mesh.position.set(q[0], q[1], q[2]);
+    n.mesh.rotation.x += 0.2; n.mesh.rotation.z += 0.13;
+    if (now - n.start > NADE[n.kind].fuse + 1) { scene.remove(n.mesh); nadeMeshes.delete(id); }
+  }
+}
+// 달리다가 C: 미끄러지기 (0.6초, 1.2초마다)
+function trySlide() {
+  const now = nowS(), sp = Math.hypot(me.ent.vel.x, me.ent.vel.z);
+  if (me.dead || !canAct() || !me.ent.onGround || now < me.nextSlide || sp < MOVE.run * 0.8) return;
+  const f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0), s = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+  me.slideDir = { f: f || 1, s, yaw: me.yaw }; me.slideUntil = now + 0.6; me.nextSlide = now + 1.2;
+  sfx.slide(); shake = Math.max(shake, 0.12);
+}
 function tryDoubleJump() {
   if (!me.stats.doubleJump || me.ent.onGround || me.doubleUsed || me.dead || !canAct()) return;
   me.doubleUsed = true; me.ent.vel.y = MOVE.jump * me.stats.doubleJump; sfx.jump2();
@@ -1180,7 +1270,7 @@ function finishReload() {
 function curSpread(Wp) {
   const moving = Math.hypot(me.ent.vel.x, me.ent.vel.z);
   const hip = Wp.spread * 1.4 + me.bloom, ads = Wp.adsSpread + me.bloom * 0.3;
-  return THREE.MathUtils.lerp(hip, ads, me.adsT) + moving * (me.adsT > 0.5 ? 0.0015 : 0.004) + (me.ent.onGround ? 0 : 0.05);
+  return (THREE.MathUtils.lerp(hip, ads, me.adsT) + moving * (me.adsT > 0.5 ? 0.0015 : 0.004)) * (1 - 0.3 * me.crT) + (me.ent.onGround ? 0 : 0.05) + (nowS() < me.slideUntil ? 0.03 : 0);
 }
 // 샷건 산탄이 퍼지는 반경(라디안). 정조준하면 30% 모임 (방장 판정과 같은 값)
 const pelletRadius = Wp => (Wp.pelletSpread || 0) * (Wp.pelletMul ?? 1) * (1 - 0.3 * me.adsT);
@@ -1213,13 +1303,15 @@ function tryFire() {
   // 연사할수록 퍼짐이 커짐 (최대 기본의 2.5배). 쉬면 줄어듦
   me.bloom = Math.min(Wp.spread * 2.5, me.bloom + (Wp.bloom ?? Wp.spread * 0.5));
   // 위치를 먼저 보내서 방장이 정확한 위치로 판정하게 함
-  net({ t: 'state', p: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z], yaw: me.yaw, pitch: me.pitch, w: me.weapon, ads: me.ads, air: !me.ent.onGround });
+  net({ t: 'state', p: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z], yaw: me.yaw, pitch: me.pitch, w: me.weapon, ads: me.ads, air: !me.ent.onGround, cr: +me.crT.toFixed(2), ln: +me.leanT.toFixed(2), sl: nowS() < me.slideUntil });
   net({ t: 'shoot', dir: dir.toArray(), w: me.weapon, ads: me.adsT > 0.7 });
 
   // 반동: 연사할수록 위로 올라가고 좌우로 흔들리는 패턴
   const k = Math.min(me.streak, 10), cls = Wp.cls;
-  me.pitch = Math.min(1.5, me.pitch + Wp.recoil * (me.ads ? 0.6 : 1) * (1 + k * 0.08));
-  me.yaw += (Math.sin(k * 0.9) * 0.5 + (Math.random() - 0.5) * 0.6) * Wp.recoil * (me.ads ? 0.6 : 1);
+  me.pitch = Math.min(1.5, me.pitch + Wp.recoil * (me.ads ? 0.6 : 1) * (1 + k * 0.08) * (1 - 0.25 * me.crT));
+  // 좌우 반동은 총 종류마다 정해진 무늬(익히면 마우스로 잡을 수 있음) + 약간의 흔들림
+  const pat = RECOIL_PAT[cls] || RECOIL_PAT.ar;
+  me.yaw -= (pat[me.streak % pat.length] * 0.8 + (Math.random() - 0.5) * 0.15) * Wp.recoil * (me.ads ? 0.6 : 1) * (1 - 0.25 * me.crT);
   recoilKick = 1; shake = Math.max(shake, (SHAKE[cls] ?? 0.2) * (me.ads ? 0.6 : 1));
   camKick += (KICK[cls] ?? 0.015) * (me.ads ? 0.7 : 1); camKickYaw += (Math.random() - 0.5) * (KICK[cls] ?? 0.015) * 0.6;
   firePunch = cls === 'sg' || cls === 'sniper' ? 1 : cls === 'dmr' || cls === 'br' ? 0.5 : 0.25;
@@ -1247,13 +1339,22 @@ function updateMe(dt) {
   const bolting = W(me.weapon).cycle === 'bolt' && me.boltT && now - me.boltT < boltLen();
   const act = canAct();
   me.ads = rightDown && !busy() && !bolting && act;
-  const running = (keys.ShiftLeft || keys.ShiftRight) && !me.ads && keys.KeyW;
+  const sliding = now < me.slideUntil && me.slideDir;
+  // 앉기(C 누르는 동안) / 미끄러지기 중엔 낮은 자세
+  const crouchWant = act && (keys.KeyC || sliding) ? 1 : 0;
+  me.crT = THREE.MathUtils.damp(me.crT, crouchWant, 12, dt);
+  // 기울이기 Q/E: 달리기·미끄러지기 중엔 안 됨, 벽이 있으면 그만큼만
+  let leanWant = act && !sliding ? (keys.KeyE ? 1 : 0) - (keys.KeyQ ? 1 : 0) : 0;
+  if (leanWant) { const [rx, rz] = rightOf(me.yaw), ey = me.ent.pos.y + eyeHeight(me.crT); if (insideSolid(me.ent.pos.x + rx * leanWant * POSE.leanEye, ey, me.ent.pos.z + rz * leanWant * POSE.leanEye)) leanWant *= 0.3; }
+  me.leanT = THREE.MathUtils.damp(me.leanT, leanWant, 12, dt);
+  const running = (keys.ShiftLeft || keys.ShiftRight) && !me.ads && keys.KeyW && me.crT < 0.3 && Math.abs(me.leanT) < 0.2;
   let input = {
     f: act ? (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0) : 0,
     s: act ? (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0) : 0,
     yaw: me.yaw, jump: act && !!keys.Space,
-    speed: (me.ads ? MOVE.ads : running ? MOVE.run : MOVE.walk) * me.stats.speedMul * W(me.weapon).move * (now < me.buffUntil ? me.buffSpeed : 1) * (now < me.usingUntil ? 0.6 : 1),
+    speed: (me.ads ? MOVE.ads : running ? MOVE.run : MOVE.walk) * (1 - 0.5 * me.crT) * me.stats.speedMul * W(me.weapon).move * (now < me.buffUntil ? me.buffSpeed : 1) * (now < me.usingUntil ? 0.6 : 1),
   };
+  if (sliding) input = { ...input, f: me.slideDir.f, s: me.slideDir.s, yaw: me.slideDir.yaw, speed: 4 + 9 * (me.slideUntil - now) / 0.6, accel: 20, jump: false };
   if (now < me.dashUntil && me.dashDir) input = { ...input, f: me.dashDir.f, s: me.dashDir.s, speed: 24, accel: 40, jump: false };
   const wasAir = !me.ent.onGround;
   const fallV = me.ent.vel.y;
@@ -1294,6 +1395,7 @@ function updateView(dt) {
   const Wp = W(me.weapon), now = nowS();
   me.adsT = THREE.MathUtils.damp(me.adsT, me.ads ? 1 : 0, 14 * me.stats.adsMul * Wp.ads * Wp.adsMul, dt);
   const gun = vGun(me.weapon), cls = Wp.cls;
+  applySkin(gun);
   const sniperScoped = Wp.optic === 'scope' && me.adsT > 0.85;
 
   // 카메라
@@ -1306,10 +1408,11 @@ function updateView(dt) {
   killPunch = Math.max(0, killPunch - dt * 4);
   hurtPulse = Math.max(0, hurtPulse - dt * 1.5);
   const sx = (Math.random() - 0.5) * shake * 0.03, sy = (Math.random() - 0.5) * shake * 0.03;
-  camera.position.set(me.ent.pos.x, me.ent.pos.y + (me.dead ? 0.35 : PLAYER.eye), me.ent.pos.z);
+  { const [rx, rz] = rightOf(me.yaw), lo = me.dead ? 0 : me.leanT * POSE.leanEye;
+    camera.position.set(me.ent.pos.x + rx * lo, me.ent.pos.y + (me.dead ? 0.35 : eyeHeight(me.crT)), me.ent.pos.z + rz * lo); }
   // 스코프 흔들림: 저격총 정조준 중 천천히 8자로 흔들림 (조준경 부착물이 바뀐 효과로 줄여 줌). 실제 사격 방향에도 들어감
   const sway = sniperScoped ? 0.0022 * Wp.swayMul : 0, st = now * 1.1;
-  camera.rotation.set(me.pitch + sy + camKick + Math.sin(st * 2) * sway * 0.5, me.yaw + sx + camKickYaw + Math.sin(st) * sway, me.dead ? 0.5 : 0);
+  camera.rotation.set(me.pitch + sy + camKick + Math.sin(st * 2) * sway * 0.5, me.yaw + sx + camKickYaw + Math.sin(st) * sway, me.dead ? 0.5 : -me.leanT * 0.12 - (nowS() < me.slideUntil ? 0.05 : 0));
   const dashing = now < me.dashUntil;
   const fov = THREE.MathUtils.lerp(settings.fov, Wp.fov * Wp.fovMul, me.adsT) + killPunch * 6 + (dashing ? 8 : 0) + firePunch * (me.adsT > 0.5 ? 0.6 : 1.8);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
@@ -1458,7 +1561,7 @@ function updateHuman(o, dt, k, now) {
   const fwd = -(o.vel.x * Math.sin(yaw) + o.vel.z * Math.cos(yaw));
   const side = o.vel.x * Math.cos(yaw) - o.vel.z * Math.sin(yaw);
   o.flinch = Math.max(0, o.flinch - dt * 6);
-  h.update(dt, { speed: o.speed, fN: fwd, sN: side, air: o.air, pitch: o.pitch, flinch: o.flinch, flinchHead: o.flinchHead, dead: false });
+  h.update(dt, { speed: o.speed, fN: fwd, sN: side, air: o.air, pitch: o.pitch, flinch: o.flinch, flinchHead: o.flinchHead, dead: false, crouch: o.cr || 0, lean: o.ln || 0 });
 }
 
 // ================= 킬캠 =================
@@ -1523,12 +1626,17 @@ resetRoundStats();
 const STAT0 = () => ({ games: { bot: { played: 0, won: 0 }, online: { played: 0, won: 0 }, run: { played: 0, won: 0, best: 0 } }, kills: 0, deaths: 0, headKills: 0, shots: 0, hits: 0, heads: 0, dmg: 0, guns: {}, rounds: 0, roundsWon: 0 });
 const stats = (() => { try { const v = JSON.parse(localStorage.getItem('fps_stats')); if (v && v.games) return Object.assign(STAT0(), v); } catch {} return STAT0(); })();
 function saveStats() { try { localStorage.setItem('fps_stats', JSON.stringify(stats)); } catch {} }
-function bumpStat(fn) { fn(stats); saveStats(); }
+function bumpStat(fn) { fn(stats); saveStats(); checkAch(); }
 function recordKillStats(m) {
   stats.rounds++;
-  if (m.killer === me.id) { stats.kills++; stats.roundsWon++; if (m.head) stats.headKills++; stats.guns[m.w] = (stats.guns[m.w] || 0) + 1; }
+  if (m.killer === me.id && !m.self) {
+    stats.kills++; stats.roundsWon++; if (m.head) stats.headKills++; stats.guns[m.w] = (stats.guns[m.w] || 0) + 1;
+    if (m.w === 'nade') stats.nadeKills = (stats.nadeKills || 0) + 1;
+    if (rs.taken === 0) stats.flawless = (stats.flawless || 0) + 1;
+    if (gameMode === 'run') stats.runStage = Math.max(stats.runStage || 0, m.scores[me.id] || 0);
+  }
   if (m.victim === me.id) stats.deaths++;
-  saveStats();
+  saveStats(); checkAch();
 }
 function showRoundResult(m) {
   const won = m.killer === me.id;
@@ -1537,14 +1645,14 @@ function showRoundResult(m) {
   ui.roundRes.innerHTML = `<div class="rr-title ${won ? 'win' : 'lose'}">${won ? '라운드 승리' : '라운드 패배'}</div>`
     + `<div class="rr-grid"><span>명중</span><b>${rs.hits} / ${rs.shots} (${acc}%)</b><span>헤드샷</span><b>${rs.heads}</b>`
     + `<span>준 피해</span><b>${Math.round(rs.dmg)}</b><span>받은 피해</span><b>${Math.round(rs.taken)}</b>`
-    + `<span>결정타</span><b>${escapeHtml(GUNS[m.w]?.name ?? '')}${m.head ? ' · 헤드샷' : ''}${dist !== null ? ` · ${dist}m` : ''}</b></div>`;
+    + `<span>결정타</span><b>${escapeHtml(weaponName(m.w))}${m.head ? ' · 헤드샷' : ''}${dist !== null ? ` · ${dist}m` : ''}</b></div>`;
   ui.roundRes.classList.remove('hidden');
   clearTimeout(ui.roundRes._t); ui.roundRes._t = setTimeout(() => ui.roundRes.classList.add('hidden'), (RULES.roundEndTime - 0.5) * 1000);
 }
 // 로비 전적 화면
 function showStats() {
   const s = stats, g = s.games, pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '-';
-  const fav = Object.entries(s.guns).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => `${escapeHtml(GUNS[id]?.name ?? id)} ${n}킬`).join(', ') || '-';
+  const fav = Object.entries(s.guns).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => `${escapeHtml(weaponName(id) || id)} ${n}킬`).join(', ') || '-';
   $('statsBody').innerHTML = `<div class="rr-grid">`
     + `<span>봇전</span><b>${g.bot.won}승 ${g.bot.played - g.bot.won}패</b>`
     + `<span>온라인</span><b>${g.online.won}승 ${g.online.played - g.online.won}패</b>`
@@ -1561,6 +1669,96 @@ $('statsBtn').onclick = showStats;
 $('statsClose').onclick = () => $('stats').classList.add('hidden');
 $('statsReset').onclick = () => { if (confirm('전적을 모두 지울까요?')) { Object.assign(stats, STAT0()); saveStats(); showStats(); } };
 
+// ================= 업적 · 해금 (총 스킨, 조준점 색) =================
+const ACH = [
+  { id: 'first_win', name: '첫 승리', desc: '봇전이나 온라인에서 경기 승리', done: s => s.games.bot.won + s.games.online.won >= 1, prog: s => [s.games.bot.won + s.games.online.won, 1], unlock: 'skin:desert' },
+  { id: 'run5', name: '절반 돌파', desc: '로그라이크 런 5스테이지 클리어', done: s => Math.max(s.runStage || 0, s.games.run.best) >= 5, prog: s => [Math.max(s.runStage || 0, s.games.run.best), 5], unlock: 'skin:forest' },
+  { id: 'run_clear', name: '런 정복', desc: '로그라이크 런 10스테이지 모두 클리어', done: s => s.games.run.won >= 1, prog: s => [s.games.run.won, 1], unlock: 'skin:gold' },
+  { id: 'heads20', name: '명사수', desc: '헤드샷으로 20번 처치', done: s => s.headKills >= 20, prog: s => [s.headKills, 20], unlock: 'skin:arctic' },
+  { id: 'nade3', name: '폭탄 전문가', desc: '수류탄으로 3번 처치', done: s => (s.nadeKills || 0) >= 3, prog: s => [s.nadeKills || 0, 3], unlock: 'skin:dragon' },
+  { id: 'flawless', name: '무결점', desc: '피해를 하나도 안 받고 라운드 승리', done: s => (s.flawless || 0) >= 1, prog: s => [s.flawless || 0, 1], unlock: 'xc:sky' },
+  { id: 'kills50', name: '베테랑', desc: '모두 합쳐 50번 처치', done: s => s.kills >= 50, prog: s => [s.kills, 50], unlock: 'xc:pink' },
+];
+const SKINS = {
+  base: { name: '기본', tint: null },
+  desert: { name: '사막', tint: 0xc2a46e, ach: 'first_win' },
+  forest: { name: '숲', tint: 0x55703c, ach: 'run5' },
+  arctic: { name: '북극', tint: 0xdfe5ea, ach: 'heads20' },
+  dragon: { name: '붉은 용', tint: 0x9a1f1f, ach: 'nade3' },
+  gold: { name: '황금', tint: 0xd8a51a, metal: true, ach: 'run_clear' },
+};
+const XCOLORS = { white: ['흰색', '#ffffff'], green: ['초록', '#4dff88'], yellow: ['노랑', '#ffe14d'], sky: ['하늘', '#4dd2ff', 'flawless'], pink: ['분홍', '#ff5ad1', 'kills50'] };
+const XSTYLES = { cross: '십자', dot: '점', both: '십자 + 점' };
+const achDone = (() => { try { return new Set(JSON.parse(localStorage.getItem('fps_ach') || '[]')); } catch { return new Set(); } })();
+const look = (() => { try { return Object.assign({ skin: 'base', xc: 'white', xs: 'cross' }, JSON.parse(localStorage.getItem('fps_look') || '{}')); } catch { return { skin: 'base', xc: 'white', xs: 'cross' }; } })();
+const unlocked = ach => !ach || achDone.has(ach);
+function checkAch() {
+  for (const a of ACH) {
+    if (achDone.has(a.id) || !a.done(stats)) continue;
+    achDone.add(a.id);
+    const [kind, key] = a.unlock.split(':');
+    toast(`업적 달성: <b>${a.name}</b><br><small>해금: ${kind === 'skin' ? SKINS[key].name + ' 총 스킨' : XCOLORS[key][0] + ' 조준점'}</small>`);
+  }
+  try { localStorage.setItem('fps_ach', JSON.stringify([...achDone])); } catch {}
+}
+function toast(html) {
+  const d = document.createElement('div'); d.className = 'toast'; d.innerHTML = html;
+  document.body.appendChild(d); sfx.pick?.('gold');
+  setTimeout(() => d.remove(), 4200);
+}
+function saveLook() { try { localStorage.setItem('fps_look', JSON.stringify(look)); } catch {} applyCrosshair(); }
+function applyCrosshair() {
+  ui.cross.style.setProperty('--xc', XCOLORS[look.xc]?.[1] || '#fff');
+  ui.cross.dataset.style = look.xs;
+}
+// 1인칭 총 스킨: 총 모델이 늦게 로드되므로 메쉬 수가 바뀌면 다시 칠함
+const skinMats = new Map();
+function skinMat(base, sk) {
+  const key = base.uuid + sk;
+  if (!skinMats.has(key)) {
+    const m = base.clone(), S = SKINS[sk];
+    m.color = base.color.clone().lerp(new THREE.Color(S.tint), 0.65);
+    if (S.metal) { m.metalness = 0.9; m.roughness = 0.28; }
+    skinMats.set(key, m);
+  }
+  return skinMats.get(key);
+}
+function applySkin(gun) {
+  let n = 0; gun.traverse(o => { if (o.isMesh) n++; });
+  const sig = look.skin + ':' + n;
+  if (gun.userData.skinSig === sig) return;
+  gun.userData.skinSig = sig;
+  const opt = gun.userData.optic;
+  gun.traverse(o => {
+    if (!o.isMesh || !o.material?.isMeshStandardMaterial) return;
+    let p = o; while (p && p !== gun) { if (p === opt) return; p = p.parent; }   // 조준경은 그대로
+    if (!o.userData.baseMat) o.userData.baseMat = o.material;
+    o.material = look.skin === 'base' || !SKINS[look.skin]?.tint ? o.userData.baseMat : skinMat(o.userData.baseMat, look.skin);
+  });
+}
+// 꾸미기 · 업적 화면
+function showCustom() {
+  const box = $('customBody');
+  const btn = (on, locked, label, data, sub = '') => `<button type="button" class="opt${on ? ' on' : ''}${locked ? ' locked' : ''}" ${data} ${locked ? 'disabled' : ''}>${label}${sub ? `<small>${sub}</small>` : ''}</button>`;
+  const achName = id => ACH.find(a => a.id === id)?.name;
+  box.innerHTML = `<h3>총 스킨</h3><div class="opts">${Object.entries(SKINS).map(([k, v]) => btn(look.skin === k, !unlocked(v.ach), `<i class="sw" style="background:${v.tint ? '#' + v.tint.toString(16).padStart(6, '0') : '#2a2c30'}"></i>${v.name}`, `data-skin="${k}"`, unlocked(v.ach) ? '' : '🔒 ' + achName(v.ach))).join('')}</div>`
+    + `<h3>조준점 색</h3><div class="opts">${Object.entries(XCOLORS).map(([k, v]) => btn(look.xc === k, !unlocked(v[2]), `<i class="sw" style="background:${v[1]}"></i>${v[0]}`, `data-xc="${k}"`, unlocked(v[2]) ? '' : '🔒 ' + achName(v[2]))).join('')}</div>`
+    + `<h3>조준점 모양</h3><div class="opts">${Object.entries(XSTYLES).map(([k, v]) => btn(look.xs === k, false, v, `data-xs="${k}"`)).join('')}</div>`
+    + `<h3>업적</h3><div class="achs">${ACH.map(a => { const [c, t] = a.prog(stats), ok = achDone.has(a.id); return `<div class="ach${ok ? ' ok' : ''}"><b>${ok ? '✓ ' : ''}${a.name}</b><span>${a.desc}</span><em>${ok ? '완료' : `${Math.min(c, t)} / ${t}`}</em></div>`; }).join('')}</div>`;
+  box.querySelectorAll('[data-skin]').forEach(b => b.onclick = () => { look.skin = b.dataset.skin; saveLook(); showCustom(); });
+  box.querySelectorAll('[data-xc]').forEach(b => b.onclick = () => { look.xc = b.dataset.xc; saveLook(); showCustom(); });
+  box.querySelectorAll('[data-xs]').forEach(b => b.onclick = () => { look.xs = b.dataset.xs; saveLook(); showCustom(); });
+  $('custom').classList.remove('hidden');
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+document.querySelectorAll('.customBtn').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); showCustom(); }));
+$('customClose').addEventListener('click', e => { e.stopPropagation(); $('custom').classList.add('hidden'); });
+$('custom').addEventListener('click', e => e.stopPropagation());
+// 잠금을 풀어 둔 스킨이 나중에 잠기면(업적 기록을 지운 경우) 기본으로
+if (!unlocked(SKINS[look.skin]?.ach)) look.skin = 'base';
+if (!unlocked(XCOLORS[look.xc]?.[2])) look.xc = 'white';
+applyCrosshair();
+
 let testHideView = false; // 테스트용
 const clock = new THREE.Clock();
 let sendAcc = 0;
@@ -1574,7 +1772,7 @@ function loop() {
     sendAcc += dt;
     if (sendAcc > 0.05 && !me.dead) {
       sendAcc = 0;
-      net({ t: 'state', p: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z], yaw: me.yaw, pitch: me.pitch, w: me.weapon, ads: me.ads, air: !me.ent.onGround });
+      net({ t: 'state', p: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z], yaw: me.yaw, pitch: me.pitch, w: me.weapon, ads: me.ads, air: !me.ent.onGround, cr: +me.crT.toFixed(2), ln: +me.leanT.toFixed(2), sl: nowS() < me.slideUntil });
     }
   } else {
     // 로비 배경: 천천히 도는 카메라
@@ -1584,6 +1782,8 @@ function loop() {
   }
   updateOthers(dt);
   if (me.id) { recordHist(); updateKillcam(dt); }
+  updateNades();
+  { const b = Math.max(0, Math.min(1, (me.blindUntil - nowS()) / me.blindLen * 1.5)); if (ui.blind._o !== b) { ui.blind.style.opacity = b; ui.blind._o = b; } }
   updateEffects(dt);
   updateShells(dt);
   composer.render();
@@ -1595,4 +1795,4 @@ loop();
 
 // 테스트용 핸들
 setMuted(muted);
-window.__fps = { me, others, stats, get killcam() { return killcam; }, histLen: () => hist.length, camPos: () => [camera.position.toArray().map(v => +v.toFixed(2)), camera.rotation.toArray().slice(0, 3).map(v => +v.toFixed(2)), camera.rotation.order, hist.slice(-2).map(h => JSON.stringify(h.os))], hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, get lootPicking() { return lootPicking; }, get shopping() { return shopping; }, selectLoot, lootSlot, endShop, useItem, W, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
+window.__fps = { me, others, stats, look, achDone, checkAch, showCustom, get killcam() { return killcam; }, histLen: () => hist.length, camPos: () => [camera.position.toArray().map(v => +v.toFixed(2)), camera.rotation.toArray().slice(0, 3).map(v => +v.toFixed(2)), camera.rotation.order, hist.slice(-2).map(h => JSON.stringify(h.os))], hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, get lootPicking() { return lootPicking; }, get shopping() { return shopping; }, selectLoot, lootSlot, endShop, useItem, W, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
