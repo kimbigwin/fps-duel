@@ -341,7 +341,7 @@ export class GameRoom {
         let u = [-d[2], 0, d[0]]; const ul = Math.hypot(...u) || 1; u = ul > 1e-6 ? u.map(x => x / ul) : [1, 0, 0];
         const v = [d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2], d[0] * u[1] - d[1] * u[0]];
         for (let i = 0; i < W.pellets; i++) {
-          const r = W.pelletSpread * Math.sqrt(Math.random()) * (i ? 1 : 0.3), a = Math.random() * Math.PI * 2;
+          const r = W.pelletSpread * (m.ads ? 0.7 : 1) * Math.sqrt(Math.random()) * (i ? 1 : 0.3), a = Math.random() * Math.PI * 2;
           const q = d.map((x, k) => x + (u[k] * Math.cos(a) + v[k] * Math.sin(a)) * r);
           const l = Math.hypot(...q); dirs.push(q.map(x => x / l));
         }

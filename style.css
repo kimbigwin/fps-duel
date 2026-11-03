@@ -91,6 +91,12 @@ button.run:hover { filter: brightness(1.12); background: linear-gradient(90deg, 
 #hitmarker.kill::before { left: 19px; height: 40px; width: 3px; background: #ff3b3b; }
 #hitmarker.kill::after { top: 19px; width: 40px; height: 3px; background: #ff3b3b; }
 #crosshair.hitpulse i { background: #ff5a5a; }
+/* 샷건 조준점: 산탄이 퍼지는 범위를 원으로 + 가운데 점 */
+#crosshair { --r: 30px; }
+#crosshair.sg i { display: none; }
+#crosshair.sg::before { content: ''; position: absolute; left: calc(-1 * var(--r)); top: calc(-1 * var(--r)); width: calc(2 * var(--r)); height: calc(2 * var(--r)); border-radius: 50%; border: 2px solid rgba(255,255,255,.85); box-sizing: border-box; box-shadow: 0 0 2px #000, inset 0 0 2px #000; }
+#crosshair.sg::after { content: ''; position: absolute; left: -2px; top: -2px; width: 4px; height: 4px; border-radius: 50%; background: #fff; box-shadow: 0 0 2px #000; }
+#crosshair.sg.hitpulse::before { border-color: #ff5a5a; }
 
 .augchips { display: flex; gap: 4px; flex-wrap: wrap; }
 .augchips span { font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 10px; background: rgba(0, 0, 0, .55); border: 1px solid currentColor; text-shadow: none; }

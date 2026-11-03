@@ -269,7 +269,8 @@ for (const [x, z] of [[-29, -29], [29, -29], [-29, 29], [29, 29], [0, -29.5], [0
 }
 
 // ---------- 후처리 ----------
-export const composer = new EffectComposer(renderer);
+// 후처리용 화면 버퍼에도 안티에일리어싱(MSAA 4배)을 켜야 얇은 선이 끊기거나 계단처럼 안 보임
+export const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 4 }));
 composer.addPass(new RenderPass(scene, camera));
 const viewPass = new RenderPass(viewScene, viewCamera);
 viewPass.clear = false; viewPass.clearDepth = true;
@@ -330,6 +331,7 @@ for (const [k, n] of Object.entries(FX_COUNT)) for (let i = 1; i <= n; i++) {
 }
 const pickFx = (k, fallback) => FX[k].length ? FX[k][Math.floor(Math.random() * FX[k].length)] : fallback;
 export const muzzleTex = () => pickFx('muzzle', flashTex);
+export const flareTex = () => pickFx('flare', flashTex);
 
 // 탄도선: 총알 방향으로 길게 늘인 십자 판 2장 (어느 각도에서 봐도 보이게)
 export function tracer(a, b, color = 0xffd27a) {
@@ -347,12 +349,23 @@ export function tracer(a, b, color = 0xffd27a) {
   scene.add(g);
   effects.push({ obj: g, life: 0.07, max: 0.07, dispose: true });
 }
-// 다른 플레이어의 총구 화염
-export function muzzleFlash(p, size = 0.5) {
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: muzzleTex(), color: new THREE.Color(1.6, 1.3, 1), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, rotation: Math.random() * Math.PI }));
+// 다른 플레이어의 총구 화염: 정면 섬광 + 쏜 방향으로 뻗는 불꽃 + 연기
+const flameGeoW = new THREE.PlaneGeometry(1, 1); flameGeoW.translate(0, 0.5, 0); flameGeoW.rotateX(-Math.PI / 2);
+export function muzzleFlash(p, size = 0.5, dir = null) {
+  const add = map => ({ map, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ ...add(pickFx('flare', flashTex)), color: new THREE.Color(2.2, 1.6, 1), rotation: Math.random() * Math.PI }));
   s.position.copy(p); s.scale.setScalar(size);
   scene.add(s);
-  effects.push({ obj: s, life: 0.05, max: 0.05 });
+  effects.push({ obj: s, life: 0.06, max: 0.06 });
+  if (dir) {
+    const g = new THREE.Group(), m = new THREE.MeshBasicMaterial({ ...add(muzzleTex()), color: new THREE.Color(2.2, 1.6, 1), side: THREE.DoubleSide });
+    const a = new THREE.Mesh(flameGeoW, m), b = new THREE.Mesh(flameGeoW, m); b.rotation.z = Math.PI / 2;
+    g.add(a, b); g.scale.set(size * 0.6, size * 0.6, size * 1.2);
+    g.position.copy(p); g.lookAt(p.clone().add(dir)); g.rotateY(Math.PI);   // lookAt은 +Z를 향하게 하므로 뒤집어서 -Z(불꽃 방향)를 앞으로
+    g.material = m; scene.add(g);
+    effects.push({ obj: g, life: 0.06, max: 0.06 });
+  }
+  puff(p, 0xd0ccc4, size * 0.5, 0.45);
 }
 
 const sparkGeo = new THREE.BoxGeometry(0.02, 0.02, 0.1);
@@ -381,14 +394,21 @@ export function puff(p, color = 0xcfcac0, size = 0.5, life = 0.6) {
   effects.push({ obj: s, life, max: life, grow: size * 1.8, vel: new THREE.Vector3(0, 0.4, 0) });
 }
 export function blood(p) {
-  for (let i = 0; i < 10; i++) {
-    const m = new THREE.Mesh(sparkGeo, new THREE.MeshBasicMaterial({ color: 0x8a0000, transparent: true }));
-    m.position.copy(p);
-    const v = new THREE.Vector3((Math.random() - 0.5) * 3, Math.random() * 2.5, (Math.random() - 0.5) * 3);
-    scene.add(m);
-    effects.push({ obj: m, life: 0.4, max: 0.4, vel: v, gravity: 9 });
+  // 맞은 순간 붉은 섬광 + 튀는 핏방울 + 핏빛 안개
+  const tex = pickFx('spark', null);
+  if (tex) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(1.6, 0.1, 0.05), transparent: true, depthWrite: false, toneMapped: false, rotation: Math.random() * Math.PI }));
+    s.position.copy(p); s.scale.setScalar(0.55);
+    scene.add(s); effects.push({ obj: s, life: 0.08, max: 0.08 });
   }
-  puff(p, 0x7a0000, 0.35, 0.35);
+  for (let i = 0; i < 18; i++) {
+    const m = new THREE.Mesh(sparkGeo, new THREE.MeshBasicMaterial({ color: 0x9a0000, transparent: true }));
+    m.position.copy(p); m.scale.setScalar(1 + Math.random());
+    const v = new THREE.Vector3((Math.random() - 0.5) * 4, Math.random() * 3, (Math.random() - 0.5) * 4);
+    scene.add(m);
+    effects.push({ obj: m, life: 0.35 + Math.random() * 0.25, max: 0.6, vel: v, gravity: 9 });
+  }
+  puff(p, 0x8a0000, 0.55, 0.45);
 }
 
 const decals = [];

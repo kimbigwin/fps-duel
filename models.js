@@ -42,13 +42,15 @@ function makeDot() {
   // 얇은 테두리 + 넓은 창: 정조준할 때 테두리가 목표를 가리지 않게
   const sight = new THREE.Group();
   const W = 0.09, H = 0.068, T = 0.004, D = 0.03;
-  sight.add(box(W * 0.7, 0.006, 0.05, M.darkMetal, 0, 0, 0));                       // 받침
-  sight.add(box(T, H, D, M.darkMetal, -(W + T) / 2, H / 2, 0));                  // 왼쪽 테두리
-  sight.add(box(T, H, D, M.darkMetal, (W + T) / 2, H / 2, 0));                   // 오른쪽 테두리
+  // 네 변이 모서리에서 겹치게 만들어 틈 없이 닫힌 네모 (받침도 테두리 폭 전체)
+  sight.add(box(W + T * 2, 0.008, 0.05, M.darkMetal, 0, -0.001, 0));             // 받침 = 아래 테두리
+  sight.add(box(T, H + T, D, M.darkMetal, -(W + T) / 2, (H + T) / 2 - 0.003, 0)); // 왼쪽 테두리
+  sight.add(box(T, H + T, D, M.darkMetal, (W + T) / 2, (H + T) / 2 - 0.003, 0));  // 오른쪽 테두리
   sight.add(box(W + T * 2, T, D, M.darkMetal, 0, H + T / 2, 0));                 // 위 테두리
   const lens = new THREE.Mesh(new THREE.PlaneGeometry(W, H - 0.003), new THREE.MeshStandardMaterial({ color: 0x88aacc, transparent: true, opacity: 0.12, roughness: 0, metalness: 1, depthWrite: false }));
   lens.position.set(0, (H + 0.003) / 2, 0); sight.add(lens);
   const dot = new THREE.Mesh(new THREE.SphereGeometry(0.0024, 8, 8), M.redDot); dot.position.set(0, DOT_Y, -0.005); sight.add(dot);
+  sight.userData = { dot, W, H, home: dot.position.clone() };
   sight.position.set(0, 0.006, -0.02);
   return sight;
 }
@@ -110,7 +112,11 @@ function topNear(model, g, z0, z1, skip) {
     if (!o.isMesh) return;
     const pos = o.geometry.attributes.position, idx = o.geometry.attributes.skinIndex, wt = o.geometry.attributes.skinWeight;
     const skipIdx = o.isSkinnedMesh ? o.skeleton.bones.map((b, i) => skip.includes(b.name.toLowerCase().replace(/_/g, ' ')) ? i : -1).filter(i => i >= 0) : [];
+    // 지운(접은) 삼각형에만 쓰인 정점은 빼고 잼
+    let live = null;
+    if (o.geometry.index) { const ix = o.geometry.index; live = new Uint8Array(pos.count); for (let t = 0; t < ix.count; t += 3) { const a = ix.getX(t), b = ix.getX(t + 1), c = ix.getX(t + 2); if (a !== b || b !== c) live[a] = live[b] = live[c] = 1; } }
     for (let i = 0; i < pos.count; i++) {
+      if (live && !live[i]) continue;
       if (skipIdx.length && idx) { let w = 0; for (let k = 0; k < 4; k++) if (skipIdx.includes(idx.getComponent(i, k))) w += wt.getComponent(i, k); if (w > 0.5) continue; }
       v.fromBufferAttribute(pos, i);
       if (o.isSkinnedMesh) o.applyBoneTransform(i, v);
@@ -119,6 +125,28 @@ function topNear(model, g, z0, z1, skip) {
     }
   });
   return top;
+}
+
+// 도트사이트 총: 조준경 앞뒤에서 레일 위로 솟은 부분(몸통에 붙은 가늠쇠·가늠자·운반 손잡이)을 지움. 창 안에 걸려 보이므로.
+// 해당 삼각형을 한 점으로 접어서 안 보이게 함 (같은 모델 파일을 쓰는 모든 총에 한 번만)
+function cutFrontSights(model, g, zFront, yMax, zRear = Infinity) {
+  const v = new THREE.Vector3(), inv = new THREE.Matrix4().copy(g.matrixWorld).invert();
+  model.updateMatrixWorld(true);
+  let cut = 0;
+  model.traverse(o => {
+    if (!o.isMesh || !o.geometry.index || o.geometry.userData.sightCut) return;
+    const pos = o.geometry.attributes.position, idx = o.geometry.index, P = [];
+    for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i); if (o.isSkinnedMesh) o.applyBoneTransform(i, v); P.push(v.clone().applyMatrix4(o.matrixWorld).applyMatrix4(inv)); }
+    for (let t = 0; t < idx.count; t += 3) {
+      const a = P[idx.getX(t)], b = P[idx.getX(t + 1)], c = P[idx.getX(t + 2)];
+      const out = (a.z < zFront && b.z < zFront && c.z < zFront) || (a.z > zRear && b.z > zRear && c.z > zRear);
+      if (out && Math.max(a.y, b.y, c.y) > yMax && Math.min(Math.abs(a.x), Math.abs(b.x), Math.abs(c.x)) < 0.035) {
+        const k = idx.getX(t); idx.setX(t + 1, k); idx.setX(t + 2, k); cut++;
+      }
+    }
+    idx.needsUpdate = true; o.geometry.userData.sightCut = true;
+  });
+  return cut;
 }
 
 function upgradeGun(g, src) {
@@ -179,6 +207,7 @@ function upgradeGun(g, src) {
   const slideB = bone('Slide');
   if (slideB) ud.slideKick = slide(slideB, back, 0.05);
   // 조준경 받침이 총 몸통보다 낮게 묻히는 모델이 있어서, 조준경 자리의 실제 윗면을 재서 그 위로 올림
+  if (ud.opticType === 'dot') ud.sightCut = cutFrontSights(model, g, ud.optic.position.z - 0.06, 0.006, ud.optic.position.z + 0.04);
   if (ud.optic) {
     // 스코프: 조준경 자리부터 눈 쪽(뒤)까지. 도트사이트: 창 너머 앞쪽 총구까지 전부 (가늠쇠 받침 등이 창 안에 보이지 않게)
     const hs = ud.cls === 'sniper' ? 0.18 : 0.06, oz = ud.optic.position.z;

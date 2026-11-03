@@ -46,13 +46,13 @@ export const GUNS = Object.fromEntries([
     body: 52, head: 110, interval: 0.45, mag: 6, reload: 2.0, spread: 0.01, adsSpread: 0.003, recoil: 0.07, fov: 60, move: 1.1, ads: 1.4, swap: 0.25, range: [20, 45, 0.7], optic: 'none', snd: 'ak', rate: 0.9 }),
   // ---- 샷건 (데미지는 산탄 1알 기준) ----
   def('sgp_w', { file: 'Shotgun_Pump_West', cls: 'sg', name: '펌프 샷건', desc: '가까우면 한 방. 쏠 때마다 펌프',
-    body: 13, head: 18, pellets: 8, pelletSpread: 0.055, interval: 0.9, cycle: 'pump', mag: 6, reload: 2.6, spread: 0.004, adsSpread: 0.002, recoil: 0.05, fov: 65, ads: 1.2, range: [6, 18, 0.25], optic: 'none', snd: 'shotgun' }),
+    body: 16, head: 22, pellets: 8, pelletSpread: 0.05, interval: 0.9, cycle: 'pump', mag: 6, reload: 2.6, spread: 0.004, adsSpread: 0.002, recoil: 0.05, fov: 65, ads: 1.2, range: [10, 24, 0.3], optic: 'none', snd: 'shotgun' }),
   def('sgp_e', { file: 'Shotgun_Pump_East', cls: 'sg', name: '장탄 펌프 샷건', desc: '8발 장전. 산탄이 넓게 퍼짐',
-    body: 11, head: 16, pellets: 10, pelletSpread: 0.07, interval: 0.8, cycle: 'pump', mag: 8, reload: 3.0, spread: 0.004, adsSpread: 0.002, recoil: 0.05, fov: 65, ads: 1.2, range: [5, 16, 0.25], optic: 'none', snd: 'shotgun', rate: 1.05 }),
+    body: 13, head: 18, pellets: 10, pelletSpread: 0.065, interval: 0.8, cycle: 'pump', mag: 8, reload: 3.0, spread: 0.004, adsSpread: 0.002, recoil: 0.05, fov: 65, ads: 1.2, range: [9, 22, 0.3], optic: 'none', snd: 'shotgun', rate: 1.05 }),
   def('sga_w', { file: 'Shotgun_Auto_West', cls: 'sg', name: '반자동 샷건', desc: '펌프 없이 빠르게 쏘는 샷건',
-    body: 11, head: 16, pellets: 7, pelletSpread: 0.06, interval: 0.3, mag: 8, reload: 2.8, spread: 0.004, adsSpread: 0.002, recoil: 0.04, fov: 65, ads: 1.2, range: [6, 18, 0.25], snd: 'shotgun', rate: 1.1 }),
+    body: 14, head: 19, pellets: 7, pelletSpread: 0.055, interval: 0.3, mag: 8, reload: 2.8, spread: 0.004, adsSpread: 0.002, recoil: 0.04, fov: 65, ads: 1.2, range: [9, 22, 0.3], snd: 'shotgun', rate: 1.1 }),
   def('sga_e', { file: 'Shotgun_Auto_East', cls: 'sg', name: '자동 샷건', desc: '누르고 있으면 연사되는 샷건',
-    body: 9, head: 13, pellets: 6, pelletSpread: 0.065, interval: 0.22, mag: 10, reload: 2.4, spread: 0.004, adsSpread: 0.002, recoil: 0.035, fov: 65, auto: true, ads: 1.2, range: [5, 15, 0.25], snd: 'shotgun', rate: 1.15 }),
+    body: 12, head: 16, pellets: 6, pelletSpread: 0.06, interval: 0.22, mag: 10, reload: 2.4, spread: 0.004, adsSpread: 0.002, recoil: 0.035, fov: 65, auto: true, ads: 1.2, range: [8, 20, 0.3], snd: 'shotgun', rate: 1.15 }),
   // ---- 저격총 ----
   def('snm_w', { file: 'Sniper_Material_West', cls: 'sniper', name: '대물 저격총', desc: '머리 한 방. 기본 저격총',
     body: 85, head: 150, interval: 1.3, cycle: 'bolt', mag: 5, reload: 2.8, spread: 0.06, adsSpread: 0, recoil: 0.06, fov: 18, move: 0.95, optic: 'scope', snd: 'sniper' }),

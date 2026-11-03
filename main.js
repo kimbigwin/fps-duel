@@ -6,7 +6,7 @@ import { Bot } from './bot.js';
 import { stepMovement, MOVE } from './physics.js';
 import {
   renderer, scene, camera, viewScene, composer, vignette, resize,
-  tracer, sparks, puff, blood, bulletHole, surfaceAt, updateEffects, flashTex, muzzleTex, muzzleFlash,
+  tracer, sparks, puff, blood, bulletHole, surfaceAt, updateEffects, flashTex, muzzleTex, flareTex, muzzleFlash,
 } from './world.js';
 import { makeGun, makeSoldier, setXray, preloadGuns } from './models.js';
 import { loadHuman, humanReady, Human } from './character.js';
@@ -18,7 +18,7 @@ const me = {
   yaw: 0, pitch: 0, hp: RULES.maxHp, maxHp: RULES.maxHp, dead: false,
   augs: [], stats: statsFor([]),
   loadout: [...DEFAULT_LOADOUT], slot: 0, weapon: DEFAULT_LOADOUT[0], ammo: {}, burstLeft: 0,
-  reloadStart: 0, reloadUntil: 0, switchUntil: 0, lastFire: 0, ads: false, adsT: 0, boltT: 0,
+  reloadStart: 0, reloadUntil: 0, switchUntil: 0, lastFire: 0, ads: false, adsT: 0, boltT: 0, bloom: 0,
   doubleUsed: false, dashReadyAt: 0, dashUntil: 0, dashDir: null, lastShiftTap: 0, streak: 0,
   ghostUntil: 0, invulnUntil: 0,
 };
@@ -62,12 +62,27 @@ const ADS_Z = { sniper: -0.22, pistol: -0.48, sg: -0.46 };
 const hipFor = cls => HIP[cls === 'pistol' ? 'pistol' : 'long'];
 // 도트사이트는 눈 가까이 당겨서 창이 넓게 보이게 (총 종류와 상관없이 같은 거리)
 const adsZ = ud => ud.opticType === 'dot' ? -0.19 : ADS_Z[ud.cls] ?? (ud.optic ? -0.3 : -0.5);
-const adsFor = g => new THREE.Vector3(0, -g.userData.sightHeight, adsZ(g.userData));
+// 가늠쇠 샷건은 원형 조준점으로 쏘므로 총을 조금 내려 몸통이 시야를 덜 가리게
+const adsFor = g => new THREE.Vector3(0, -g.userData.sightHeight - (g.userData.cls === 'sg' && !g.userData.optic ? 0.04 : 0), adsZ(g.userData));
 
 const G = id => GUNS[id] || GUNS[DEFAULT_LOADOUT[0]];
 const heavy = id => { const c = G(id).cls; return c === 'sniper' || c === 'sg'; };
-const flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: new THREE.Color(1.6, 1.3, 1), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-flashSprite.visible = false; viewScene.add(flashSprite);
+// 내 총구 화염: 총구에서 앞으로 뻗는 불꽃 판 2장(십자) + 정면 섬광 + 불꽃 별 모양
+const flashAdd = map => new THREE.MeshBasicMaterial({ map, color: new THREE.Color(2.2, 1.6, 1.0), transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide });
+const flashGroup = new THREE.Group(); flashGroup.visible = false; flashGroup.renderOrder = 10; viewScene.add(flashGroup);
+const flameGeo = new THREE.PlaneGeometry(1, 1); flameGeo.translate(0, 0.5, 0); flameGeo.rotateX(-Math.PI / 2);   // 밑동이 총구, 앞(-Z)으로 뻗음
+const flameA = new THREE.Mesh(flameGeo, flashAdd(flashTex)), flameB = new THREE.Mesh(flameGeo, flameA.material); flameB.rotation.z = Math.PI / 2;
+const flareS = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: new THREE.Color(2.4, 1.8, 1.1), transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+const starS = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, color: new THREE.Color(2.0, 1.4, 0.8), transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+flameA.renderOrder = flameB.renderOrder = flareS.renderOrder = starS.renderOrder = 10;
+flashGroup.add(flameA, flameB, flareS, starS);
+// 총 종류별 화염 길이(m, 1인칭 화면 기준)
+const FLAME = { ar: 0.42, br: 0.48, dmr: 0.5, smg: 0.36, pistol: 0.28, sg: 0.6, sniper: 0.65 };
+let flashUntil = 0, flashFrames = 0;
+// 화면 반동(보이는 것만, 실제 조준은 me.pitch): 쏠 때 위로 튀었다가 빨리 돌아옴
+let camKick = 0, camKickYaw = 0, firePunch = 0;
+const KICK = { ar: 0.012, br: 0.02, dmr: 0.028, smg: 0.009, pistol: 0.02, sg: 0.05, sniper: 0.06 };
+const SHAKE = { ar: 0.22, br: 0.3, dmr: 0.32, smg: 0.18, pistol: 0.2, sg: 0.55, sniper: 0.6 };
 const worldFlash = new THREE.PointLight(0xffb060, 0, 12, 2); scene.add(worldFlash);
 
 // 탄피 (1인칭 화면 안에서 튀어나감)
@@ -91,17 +106,31 @@ function updateShells(dt) {
 }
 
 // ================= 사운드 =================
-let audio, master;
+let audio, master, verb;
+const MASTER = 0.8;
 // 음소거: M 키 또는 스피커 버튼. 브라우저에 기억
 let muted = (() => { try { return localStorage.getItem('fps_mute') === '1'; } catch { return false; } })();
 function ac() {
-  if (!audio) { audio = new AudioContext(); master = audio.createGain(); master.gain.value = muted ? 0 : 0.6; master.connect(audio.destination); }
+  if (!audio) {
+    audio = new AudioContext();
+    // 모든 소리 → master → 압축기(크게 해도 찢어지지 않게) → 스피커
+    const comp = audio.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.knee.value = 10; comp.ratio.value = 4; comp.attack.value = 0.002; comp.release.value = 0.15;
+    master = audio.createGain(); master.gain.value = muted ? 0 : MASTER;
+    master.connect(comp).connect(audio.destination);
+    // 울림(잔향): 총소리 꼬리용. 소음을 지수적으로 줄인 임펄스로 만든 간단한 리버브
+    const len = Math.floor(audio.sampleRate * 1.3), ir = audio.createBuffer(2, len, audio.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2); }
+    verb = audio.createConvolver(); verb.buffer = ir;
+    const vg = audio.createGain(); vg.gain.value = 0.5;
+    verb.connect(vg).connect(master);
+  }
   return audio;
 }
 function setMuted(v) {
   muted = v;
   try { localStorage.setItem('fps_mute', v ? '1' : '0'); } catch {}
-  if (master) master.gain.setTargetAtTime(v ? 0 : 0.6, audio.currentTime, 0.02);
+  if (master) master.gain.setTargetAtTime(v ? 0 : MASTER, audio.currentTime, 0.02);
   document.querySelectorAll('.muteBtn').forEach(b => { b.textContent = v ? '🔇 소리 꺼짐 (M)' : '🔊 소리 켜짐 (M)'; b.classList.toggle('off', v); });
 }
 document.querySelectorAll('.muteBtn').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); setMuted(!muted); }));
@@ -115,12 +144,14 @@ function noiseBurst(len, type, freq, gain, decay = 3, when = 0) {
   const g = a.createGain(); g.gain.value = gain;
   src.connect(f).connect(g).connect(master); src.start(t);
 }
-function thump(f0, f1, len, gain, when = 0) {
+function thump(f0, f1, len, gain, when = 0, send = 0) {
   const a = ac(), t = a.currentTime + when;
   const o = a.createOscillator(), g = a.createGain();
+  o.type = 'sine';
   o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + len);
-  g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.001, t + len);
-  o.connect(g).connect(master); o.start(t); o.stop(t + len);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + 0.004); g.gain.exponentialRampToValueAtTime(0.001, t + len);
+  o.connect(g).connect(master); o.start(t); o.stop(t + len + 0.02);
+  if (send) { const sg = a.createGain(); sg.gain.value = send; g.connect(sg).connect(verb); }
 }
 function tone(freq, len, gain, when = 0, type = 'triangle') {
   const a = ac(), t = a.currentTime + when;
@@ -130,10 +161,12 @@ function tone(freq, len, gain, when = 0, type = 'triangle') {
 }
 // ---- 녹음된 효과음 (CC0: Free Firearm Sound Library 실총 녹음, Kenney Impact/UI Audio, Kenney Starter Kit FPS) ----
 const SAMPLE_SETS = {
-  rifle: ['rifle1', 'rifle2'], sniper: ['sniper1', 'sniper2'], ak: ['ak1', 'ak2'], shotgun: ['shotgun1', 'shotgun2'], pistol: ['pistol1', 'pistol2'],
+  rifle: ['rifle1', 'rifle2'], sniper: ['sniper1', 'sniper2'], ak: ['ak1', 'ak2', 'ak3', 'ak4', 'ak5', 'ak6', 'ak7'], shotgun: ['shotgun1', 'shotgun2'], pistol: ['pistol1', 'pistol2'],
   step: ['step0', 'step1', 'step2', 'step3', 'step4'],
   wall: ['wall0', 'wall1', 'wall2'], metal: ['metal0', 'metal1', 'metal2'], wood: ['wood0', 'wood1', 'wood2'],
-  flesh: ['flesh0', 'flesh1', 'flesh2'], killpunch: ['killpunch'], headmetal: ['headmetal'],
+  flesh: ['flesh0', 'flesh1', 'flesh2'], fleshh: ['fleshh0', 'fleshh1', 'fleshh2', 'fleshh3', 'fleshh4'], punch: ['punch0', 'punch1', 'punch2', 'punch3', 'punch4'],
+  killpunch: ['killpunch', 'killpunch1', 'killpunch2', 'killpunch3', 'killpunch4'], headmetal: ['headmetal', 'headmetal1', 'headmetal2', 'headmetal3', 'headmetal4'],
+  wallh: ['wallh0', 'wallh1', 'wallh2', 'wallh3', 'wallh4'], woodh: ['woodh0', 'woodh1', 'woodh2', 'woodh3', 'woodh4'], metalh: ['metalm0', 'metalm1', 'metalm2', 'metalm3', 'metalm4'],
   ui_hover: ['ui_hover'], ui_click: ['ui_click'], ui_switch: ['ui_switch'], swap: ['swap'], land: ['land'], jump: ['jump'],
 };
 const buffers = {};
@@ -147,7 +180,7 @@ function loadSamples() {
   return samplesLoading;
 }
 // 샘플 재생. 아직 안 불러왔으면 false (합성음으로 대신)
-function play(set, { gain = 1, rate = 1, when = 0, lowpass = 0 } = {}) {
+function play(set, { gain = 1, rate = 1, when = 0, lowpass = 0, send = 0 } = {}) {
   const list = SAMPLE_SETS[set]; if (!list) return false;
   const name = list[Math.floor(Math.random() * list.length)];
   const buf = buffers[name]; if (!buf) return false;
@@ -157,6 +190,7 @@ function play(set, { gain = 1, rate = 1, when = 0, lowpass = 0 } = {}) {
   let node = src;
   if (lowpass) { const f = a.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lowpass; node = node.connect(f); }
   node.connect(g).connect(master); src.start(t);
+  if (send) { const sg = a.createGain(); sg.gain.value = send; g.connect(sg).connect(verb); }
   return true;
 }
 // 거리에 따라 작아지는 소리 (탄착음 등)
@@ -168,12 +202,19 @@ function playAt(set, pos, gain = 1, range = 35) {
 // 브라우저는 클릭 전에는 소리를 막으므로 첫 입력 때 깨움
 ['pointerdown', 'keydown'].forEach(ev => addEventListener(ev, () => { const a = ac(); if (a.state === 'suspended') a.resume(); loadSamples(); }, { passive: true }));
 
-const LOUD = { rifle: 0.9, ak: 0.9, sniper: 1, shotgun: 1, pistol: 0.75 };
+const LOUD = { rifle: 0.95, ak: 0.95, sniper: 1, shotgun: 1, pistol: 0.8 };
+// 총소리 겹: [저음 시작Hz, 끝Hz, 길이, 크기, 울림양]. 녹음 위에 '쿵'과 잔향을 얹어 묵직하게
+const BODY = { ar: [120, 42, 0.13, 0.75, 0.3], br: [105, 38, 0.17, 0.85, 0.35], dmr: [100, 36, 0.2, 0.9, 0.4], smg: [140, 50, 0.09, 0.55, 0.22], pistol: [150, 55, 0.1, 0.6, 0.25], sg: [85, 30, 0.3, 1.0, 0.45], sniper: [75, 26, 0.38, 1.0, 0.55] };
 const sfx = {
   // 총소리: 총마다 녹음 묶음 + 재생 속도가 다름. far = 상대가 쏜 소리 (작고 먹먹하게)
   gun(id, far) {
     const W = G(id), set = W.snd, r = W.rate * (0.97 + Math.random() * 0.06), L = LOUD[set] || 0.9;
-    if (play(set, far ? { gain: L * 0.42, rate: r, lowpass: set === 'sniper' ? 1800 : 2200 } : { gain: L, rate: r })) return;
+    const B = BODY[W.cls] || BODY.ar;
+    if (play(set, far ? { gain: L * 0.42, rate: r, lowpass: set === 'sniper' ? 1800 : 2200, send: B[4] * 1.4 } : { gain: L, rate: r, send: B[4] })) {
+      thump(B[0], B[1], B[2], B[3] * (far ? 0.35 : 1), 0, B[4]);
+      if (!far) noiseBurst(0.035, 'highpass', 2800, 0.35, 5);   // 총구 앞 '딱' 하는 공기 터짐
+      return;
+    }
     const k = far ? 0.35 : 1;
     if (set === 'sniper' || set === 'shotgun') { noiseBurst(0.6, 'lowpass', 1800, 0.9 * k, 5); thump(90, 28, 0.3, k); }
     else { noiseBurst(0.14, 'lowpass', 3200, 0.7 * k, 4); thump(150, 40, 0.09, 0.8 * k); }
@@ -184,10 +225,13 @@ const sfx = {
   // 맞혔을 때: 몸통은 묵직한 '퍽', 헤드샷은 쨍한 '팅'
   hit(head) {
     // 히트마커 소리(합성) + 실제 충격음(녹음)
-    if (head) { tone(2600, 0.12, 0.25, 0, 'sine'); tone(3900, 0.18, 0.15, 0.01, 'sine'); play('headmetal', { gain: 0.5, rate: 1.2 }); }
-    else { tone(1300, 0.05, 0.12); if (!play('flesh', { gain: 0.9 })) { thump(320, 120, 0.06, 0.35); noiseBurst(0.04, 'bandpass', 1400, 0.3, 4); } }
+    // 높은 '띵' 대신 묵직한 충격음이 주인공. 헤드샷은 짧은 금속음을 얹어 구분
+    play('fleshh', { gain: 1, rate: 0.9 + Math.random() * 0.15 }); play('punch', { gain: 0.55, rate: 0.95 + Math.random() * 0.1 });
+    thump(170, 55, 0.09, 0.5);
+    if (head) { play('headmetal', { gain: 0.75, rate: 0.85 + Math.random() * 0.1 }); tone(1150, 0.07, 0.07, 0.005, 'sine'); }
+    else tone(420, 0.04, 0.05, 0, 'sine');
   },
-  kill() { play('killpunch', { gain: 0.9 }); thump(160, 50, 0.25, 0.5); tone(660, 0.25, 0.2, 0.02); tone(990, 0.35, 0.18, 0.08); tone(1320, 0.4, 0.12, 0.14); },
+  kill() { play('killpunch', { gain: 1 }); thump(130, 40, 0.3, 0.8, 0, 0.3); tone(660, 0.25, 0.2, 0.02); tone(990, 0.35, 0.18, 0.08); tone(1320, 0.4, 0.12, 0.14); },
   hurt() { thump(220, 70, 0.15, 0.5); noiseBurst(0.08, 'lowpass', 800, 0.3, 3); },
   step() { if (!play('step', { gain: 0.35, rate: 0.9 + Math.random() * 0.2 })) noiseBurst(0.06, 'lowpass', 500, 0.18, 2); },
   land() { play('land', { gain: 0.5 }); },
@@ -649,7 +693,7 @@ function onMessage(m) {
       else {
         const o = others.get(m.id);
         from = o3.clone();
-        if (o) { o.mesh.userData.getGun(o.w).userData.muzzle.getWorldPosition(from); if (o.mesh.visible) muzzleFlash(from, cls === 'sniper' ? 0.7 : cls === 'sg' ? 0.65 : cls === 'pistol' ? 0.3 : 0.45); }
+        if (o) { o.mesh.userData.getGun(o.w).userData.muzzle.getWorldPosition(from); if (o.mesh.visible) muzzleFlash(from, cls === 'sniper' ? 1.1 : cls === 'sg' ? 1.0 : cls === 'pistol' ? 0.5 : 0.75, m.rays?.[0] ? new THREE.Vector3(...m.rays[0].end).sub(from).normalize() : null); }
         sfx.gun(m.w, true);
       }
       let sounded = false;
@@ -669,7 +713,7 @@ function onMessage(m) {
         else {
           const s = surfaceAt(o3, end);
           if (s) {
-            if (!sounded) { playAt(s.kind || 'wall', s.point, cls === 'sniper' ? 1 : 0.7); sounded = true; }
+            if (!sounded) { const heavyHit = cls === 'sniper' || cls === 'sg' || cls === 'dmr'; playAt((s.kind || 'wall') + (heavyHit ? 'h' : ''), s.point, heavyHit ? 1 : 0.8); sounded = true; }
             bulletHole(s.point, s.normal);
             sparks(s.point, s.normal, 0xffb050, cls === 'sniper' ? 14 : pel ? 3 : 6);
             if (!pel || Math.random() < 0.35) puff(s.point.clone().addScaledVector(s.normal, 0.1), 0xbdb6aa, cls === 'sniper' ? 0.9 : 0.4);
@@ -688,7 +732,7 @@ function onMessage(m) {
         }
       } else {
         const o = others.get(m.target);
-        if (o) { o.flinch = Math.min(1.4, o.flinch + (m.head ? 1.2 : 0.7)); o.flinchHead = m.head; }
+        if (o) { o.flinch = Math.min(2, o.flinch + (m.head ? 1.6 : 1.0)); o.flinchHead = m.head; }
         if (m.by === me.id) {
           const killing = m.hp <= 0;
           flashClass(ui.hit, killing ? 400 : 160, 'head', !!m.head);
@@ -789,7 +833,7 @@ const cvs = renderer.domElement;
 // 마우스 잠금(포인터 락)은 이 두 함수로만 다룸.
 // 잠금 요청은 클릭/키 입력 직후에만 성공하고, 실패해도 pointerlockchange가 오지 않으므로
 // 실패하면 반드시 '클릭해서 계속' 화면을 띄워서 사용자가 다시 잠글 수 있게 함
-let lockPending = false;
+let lockPending = false, lockedAt = 0;
 function refreshPause() {
   const blocking = picking || gunPicking || !ui.runEnd.classList.contains('hidden');
   ui.pause.classList.toggle('hidden', locked || lockPending || blocking || !me.id);
@@ -808,6 +852,7 @@ cvs.addEventListener('click', () => { if (!locked && me.id && !picking && !gunPi
 document.addEventListener('pointerlockerror', () => { lockPending = false; refreshPause(); });
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === cvs;
+  if (locked) lockedAt = performance.now();
   lockPending = false;
   refreshPause();
   if (!locked) {
@@ -817,7 +862,8 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('mousemove', e => {
-  if (!locked || Math.abs(e.movementX) > 250 || Math.abs(e.movementY) > 250) return; // 포인터락 직후 튀는 값 무시
+  // 포인터락이 걸린 직후 한두 번 엉뚱하게 튀는 값만 무시 (빠르게 휙 돌리는 정상 움직임은 그대로 받음)
+  if (!locked || (performance.now() - lockedAt < 150 && (Math.abs(e.movementX) > 200 || Math.abs(e.movementY) > 200)) || Math.abs(e.movementX) > 3000) return;
   const sens = 0.0022 * (camera.fov / 75);
   me.yaw -= e.movementX * sens;
   me.pitch = THREE.MathUtils.clamp(me.pitch - e.movementY * sens, -1.5, 1.5);
@@ -909,6 +955,15 @@ function finishReload() {
   updateAmmo();
 }
 
+// 현재 탄퍼짐(라디안): 지향사격 기본 + 연사 누적(블룸) + 이동 + 공중. 정조준하면 크게 줄어듦
+function curSpread(Wp) {
+  const moving = Math.hypot(me.ent.vel.x, me.ent.vel.z);
+  const hip = Wp.spread * 1.4 + me.bloom, ads = Wp.adsSpread + me.bloom * 0.3;
+  return THREE.MathUtils.lerp(hip, ads, me.adsT) + moving * (me.adsT > 0.5 ? 0.0015 : 0.004) + (me.ent.onGround ? 0 : 0.05);
+}
+// 샷건 산탄이 퍼지는 반경(라디안). 정조준하면 30% 모임 (방장 판정과 같은 값)
+const pelletRadius = Wp => (Wp.pelletSpread || 0) * (1 - 0.3 * me.adsT);
+
 // 노리쇠/펌프 동작 시간
 const boltLen = () => { const Wp = W(me.weapon); return Math.min((Wp.cycle === 'pump' ? 0.55 : 0.9) * me.stats.boltMul, Wp.interval * 0.85); };
 
@@ -927,26 +982,35 @@ function tryFire() {
   me.lastFire = now; firedThisClick = true;
   me.ammo[me.weapon]--; updateAmmo();
 
-  // 퍼짐: 정조준/이동/점프에 따라 달라짐 (샷건 산탄은 방장이 이 방향 둘레로 퍼뜨림)
-  const moving = Math.hypot(me.ent.vel.x, me.ent.vel.z);
-  const spread = THREE.MathUtils.lerp(Wp.spread, Wp.adsSpread, me.adsT) + moving * 0.002 + (me.ent.onGround ? 0 : 0.04);
+  // 퍼짐: 원 안에 고르게 (샷건 산탄은 방장이 이 방향 둘레로 다시 퍼뜨림)
+  const spread = curSpread(Wp);
   const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
-  dir.x += (Math.random() - 0.5) * 2 * spread; dir.y += (Math.random() - 0.5) * 2 * spread; dir.z += (Math.random() - 0.5) * 2 * spread;
-  dir.normalize();
+  { const r = spread * Math.sqrt(Math.random()), a = Math.random() * Math.PI * 2;
+    const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize(), up = new THREE.Vector3().crossVectors(right, dir);
+    dir.addScaledVector(right, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r).normalize(); }
+  // 연사할수록 퍼짐이 커짐 (최대 기본의 2.5배). 쉬면 줄어듦
+  me.bloom = Math.min(Wp.spread * 2.5, me.bloom + (Wp.bloom ?? Wp.spread * 0.5));
   // 위치를 먼저 보내서 방장이 정확한 위치로 판정하게 함
   net({ t: 'state', p: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z], yaw: me.yaw, pitch: me.pitch, w: me.weapon, ads: me.ads, air: !me.ent.onGround });
-  net({ t: 'shoot', dir: dir.toArray(), w: me.weapon });
+  net({ t: 'shoot', dir: dir.toArray(), w: me.weapon, ads: me.adsT > 0.7 });
 
   // 반동: 연사할수록 위로 올라가고 좌우로 흔들리는 패턴
   const k = Math.min(me.streak, 10), cls = Wp.cls;
   me.pitch = Math.min(1.5, me.pitch + Wp.recoil * (me.ads ? 0.6 : 1) * (1 + k * 0.08));
   me.yaw += (Math.sin(k * 0.9) * 0.5 + (Math.random() - 0.5) * 0.6) * Wp.recoil * (me.ads ? 0.6 : 1);
-  recoilKick = 1; shake = Math.max(shake, cls === 'sniper' ? 0.35 : cls === 'sg' ? 0.3 : cls === 'pistol' ? 0.12 : 0.1);
-  flashSprite.material.map = muzzleTex();
-  flashSprite.visible = true; flashSprite.material.rotation = Math.random() * Math.PI;
-  flashSprite.scale.setScalar(cls === 'sniper' ? 0.35 : cls === 'sg' ? 0.32 : cls === 'pistol' ? 0.16 : 0.22);
-  worldFlash.intensity = 30; worldFlash.position.copy(muzzleWorld());
-  setTimeout(() => { flashSprite.visible = false; worldFlash.intensity = 0; }, 45);
+  recoilKick = 1; shake = Math.max(shake, (SHAKE[cls] ?? 0.2) * (me.ads ? 0.6 : 1));
+  camKick += (KICK[cls] ?? 0.015) * (me.ads ? 0.7 : 1); camKickYaw += (Math.random() - 0.5) * (KICK[cls] ?? 0.015) * 0.6;
+  firePunch = cls === 'sg' || cls === 'sniper' ? 1 : cls === 'dmr' || cls === 'br' ? 0.5 : 0.25;
+  // 총구 화염: 2프레임 이상 확실히 보이게
+  const fl = FLAME[cls] ?? 0.32, mt = muzzleTex();
+  flameA.material.map = mt; flameA.material.needsUpdate = true;
+  flameA.scale.set(fl * 0.55, fl, 1); flameB.scale.set(fl * 0.55, fl, 1);
+  flameA.rotation.z = Math.random() * 0.6 - 0.3; flameB.rotation.z = Math.PI / 2 + Math.random() * 0.6 - 0.3;
+  flareS.material.map = flareTex(); flareS.scale.setScalar(fl * 0.75); flareS.material.rotation = Math.random() * Math.PI;
+  starS.material.map = mt; starS.scale.setScalar(fl * 0.55); starS.material.rotation = Math.random() * Math.PI * 2;
+  flashGroup.visible = true; flashUntil = now + 0.06; flashFrames = 3;
+  worldFlash.intensity = cls === 'sg' || cls === 'sniper' ? 80 : 50; worldFlash.position.copy(muzzleWorld());
+  if (!Wp.auto || Math.random() < 0.35) puff(muzzleWorld(), 0xcfcac0, cls === 'sg' || cls === 'sniper' ? 0.5 : 0.28, 0.5);
   sfx.gun(me.weapon);
   if (Wp.cycle) { sfx.bolt(boltLen()); me.boltT = now; setTimeout(ejectShell, boltLen() * 600); }
   else ejectShell();
@@ -1005,14 +1069,19 @@ function updateView(dt) {
   const sniperScoped = Wp.optic === 'scope' && me.adsT > 0.85;
 
   // 카메라
-  shake = Math.max(0, shake - dt * 2);
+  shake = Math.max(0, shake - dt * 2.5);
+  camKick = THREE.MathUtils.damp(camKick, 0, 16, dt); camKickYaw = THREE.MathUtils.damp(camKickYaw, 0, 16, dt);
+  firePunch = Math.max(0, firePunch - dt * 9);
+  me.bloom = Math.max(0, me.bloom - dt * (Wp.spread * 3 + 0.01));
+  if (flashGroup.visible && now >= flashUntil && flashFrames <= 0) { flashGroup.visible = false; worldFlash.intensity = 0; }
+  flashFrames--;
   killPunch = Math.max(0, killPunch - dt * 4);
   hurtPulse = Math.max(0, hurtPulse - dt * 1.5);
   const sx = (Math.random() - 0.5) * shake * 0.03, sy = (Math.random() - 0.5) * shake * 0.03;
   camera.position.set(me.ent.pos.x, me.ent.pos.y + (me.dead ? 0.35 : PLAYER.eye), me.ent.pos.z);
-  camera.rotation.set(me.pitch + sy, me.yaw + sx, me.dead ? 0.5 : 0);
+  camera.rotation.set(me.pitch + sy + camKick, me.yaw + sx + camKickYaw, me.dead ? 0.5 : 0);
   const dashing = now < me.dashUntil;
-  const fov = THREE.MathUtils.lerp(75, Wp.fov, me.adsT) + killPunch * 6 + (dashing ? 8 : 0);
+  const fov = THREE.MathUtils.lerp(75, Wp.fov, me.adsT) + killPunch * 6 + (dashing ? 8 : 0) + firePunch * (me.adsT > 0.5 ? 0.6 : 1.8);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   // 화면 테두리: 체력 낮음 + 맞을 때 번쩍
   const r = Math.max(0, me.hp) / me.maxHp;
@@ -1055,12 +1124,30 @@ function updateView(dt) {
   viewRoot.rotation.set(rotX, rotY, rotZ);
   for (const id in vGuns) vGuns[id].visible = id === me.weapon;
   viewRoot.visible = !me.dead && !sniperScoped && !testHideView;
-  flashSprite.position.copy(gun.userData.muzzle.position).applyEuler(viewRoot.rotation).add(viewRoot.position);
+  flashGroup.position.copy(gun.userData.muzzle.position).applyEuler(viewRoot.rotation).add(viewRoot.position);
+  flashGroup.rotation.copy(viewRoot.rotation);
+  // 레드도트: 진짜 도트사이트처럼 빨간 점이 항상 실제 조준점(화면 가운데)에 보이게, 반동·흔들림만큼 창 안에서 보정
+  const opt = gun.userData.optic;
+  if (opt?.userData.dot) {
+    const D = opt.userData.dot, od = opt.userData;
+    D.position.copy(od.home);
+    if (me.adsT > 0.6) {
+      viewRoot.updateMatrixWorld(true);
+      const wz = D.getWorldPosition(new THREE.Vector3()).z;
+      const t = opt.worldToLocal(new THREE.Vector3(0, 0, wz));
+      D.position.set(THREE.MathUtils.clamp(t.x, -od.W / 2 + 0.004, od.W / 2 - 0.004), THREE.MathUtils.clamp(t.y, 0.006, od.H - 0.004), od.home.z);
+    }
+  }
 
   ui.scope.classList.toggle('hidden', !sniperScoped || me.dead);
-  ui.cross.style.opacity = me.adsT > 0.5 || me.dead ? 0 : 1;
-  const gap = Math.round(6 + ((Wp.spread + (Wp.pelletSpread || 0)) * 300) * (1 - me.adsT) + sp * 1.5 + recoilKick * 8);
-  ui.cross.style.setProperty('--gap', gap + 'px');
+  // 조준점: 실제 탄퍼짐 각도를 화면 픽셀로 바꿔서 그만큼 벌어짐. 샷건은 산탄 범위를 원으로 표시
+  const pxPerRad = (innerHeight / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const isSg = !!Wp.pellets;
+  ui.cross.classList.toggle('sg', isSg);
+  ui.cross.style.opacity = me.dead || sniperScoped ? 0 : isSg ? (me.adsT > 0.5 && Wp.optic ? 0.35 : 1) : me.adsT > 0.5 ? 0 : 1;
+  const sprPx = Math.tan(curSpread(Wp)) * pxPerRad;
+  if (isSg) ui.cross.style.setProperty('--r', Math.round(Math.tan(pelletRadius(Wp) + curSpread(Wp)) * pxPerRad + recoilKick * 6) + 'px');
+  ui.cross.style.setProperty('--gap', Math.round(Math.max(4, sprPx) + recoilKick * 6) + 'px');
   if (now >= me.reloadUntil && me.ammo[me.weapon] === 0) ui.reload.textContent = 'R 키로 재장전';
 }
 
@@ -1177,4 +1264,4 @@ loop();
 
 // 테스트용 핸들
 setMuted(muted);
-window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) locked = true; }, vGun, get gunPicking() { return gunPicking; }, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
+window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
