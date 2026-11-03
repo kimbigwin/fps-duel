@@ -60,7 +60,9 @@ function vGun(id) {
 const HIP = { long: new THREE.Vector3(0.15, -0.088, -0.47), pistol: new THREE.Vector3(0.13, -0.1, -0.5) };
 const ADS_Z = { sniper: -0.22, pistol: -0.48, sg: -0.46 };
 const hipFor = cls => HIP[cls === 'pistol' ? 'pistol' : 'long'];
-const adsFor = g => new THREE.Vector3(0, -g.userData.sightHeight, ADS_Z[g.userData.cls] ?? (g.userData.optic ? -0.3 : -0.5));
+// 도트사이트는 눈 가까이 당겨서 창이 넓게 보이게 (총 종류와 상관없이 같은 거리)
+const adsZ = ud => ud.opticType === 'dot' ? -0.19 : ADS_Z[ud.cls] ?? (ud.optic ? -0.3 : -0.5);
+const adsFor = g => new THREE.Vector3(0, -g.userData.sightHeight, adsZ(g.userData));
 
 const G = id => GUNS[id] || GUNS[DEFAULT_LOADOUT[0]];
 const heavy = id => { const c = G(id).cls; return c === 'sniper' || c === 'sg'; };
@@ -1155,4 +1157,4 @@ loop();
 
 // 테스트용 핸들
 setMuted(muted);
-window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, vGun, get gunPicking() { return gunPicking; }, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
+window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) locked = true; }, vGun, get gunPicking() { return gunPicking; }, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };

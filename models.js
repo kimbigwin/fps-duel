@@ -33,19 +33,22 @@ const VIEW_SCALE = 1.714;   // 1인칭 화면용 크기 (기존 돌격소총과 
 const MAX_LEN = 1.6;        // 너무 긴 총은 화면을 가리지 않게 줄임
 const TRIGGER_Z = 0.06;
 // 조준선 높이(총 윗면 기준): 도트사이트, 스코프, 가늠쇠
-const SIGHT = { dot: 0.036, scope: 0.055, none: 0.018 };
+const DOT_Y = 0.036;      // 도트사이트 창 가운데 높이(받침 기준)
+const SIGHT = { dot: 0.006 + DOT_Y, scope: 0.055, none: 0.018 };
 // 모델이 오기 전 상자 길이 (모델 실제 길이 × VIEW_SCALE과 비슷하게)
 const ROUGH_LEN = { ar: 1.2, br: 1.35, dmr: 1.3, smg: 0.9, pistol: 0.36, sg: 1.3, sniper: 1.6 };
 
 function makeDot() {
+  // 얇은 테두리 + 넓은 창: 정조준할 때 테두리가 목표를 가리지 않게
   const sight = new THREE.Group();
-  sight.add(box(0.05, 0.012, 0.09, M.darkMetal, 0, 0, 0));
-  sight.add(box(0.008, 0.055, 0.07, M.darkMetal, -0.024, 0.03, 0));
-  sight.add(box(0.008, 0.055, 0.07, M.darkMetal, 0.024, 0.03, 0));
-  sight.add(box(0.05, 0.008, 0.07, M.darkMetal, 0, 0.058, 0));
-  const lens = new THREE.Mesh(new THREE.PlaneGeometry(0.04, 0.045), new THREE.MeshStandardMaterial({ color: 0x88aacc, transparent: true, opacity: 0.18, roughness: 0, metalness: 1 }));
-  lens.position.set(0, 0.03, 0); sight.add(lens);
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 8, 8), M.redDot); dot.position.set(0, 0.03, -0.01); sight.add(dot);
+  const W = 0.09, H = 0.068, T = 0.004, D = 0.03;
+  sight.add(box(W * 0.7, 0.006, 0.05, M.darkMetal, 0, 0, 0));                       // 받침
+  sight.add(box(T, H, D, M.darkMetal, -(W + T) / 2, H / 2, 0));                  // 왼쪽 테두리
+  sight.add(box(T, H, D, M.darkMetal, (W + T) / 2, H / 2, 0));                   // 오른쪽 테두리
+  sight.add(box(W + T * 2, T, D, M.darkMetal, 0, H + T / 2, 0));                 // 위 테두리
+  const lens = new THREE.Mesh(new THREE.PlaneGeometry(W, H - 0.003), new THREE.MeshStandardMaterial({ color: 0x88aacc, transparent: true, opacity: 0.12, roughness: 0, metalness: 1, depthWrite: false }));
+  lens.position.set(0, (H + 0.003) / 2, 0); sight.add(lens);
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.0024, 8, 8), M.redDot); dot.position.set(0, DOT_Y, -0.005); sight.add(dot);
   sight.position.set(0, 0.006, -0.02);
   return sight;
 }
@@ -77,7 +80,7 @@ export function makeGun(id) {
   if (G.optic === 'scope') optic = makeScope();
   if (optic) g.add(optic);
   const muzzle = new THREE.Object3D(); muzzle.position.set(0, -0.03, TRIGGER_Z - L * 0.62); g.add(muzzle);
-  g.userData = { id: G.id, cls: G.cls, mag, muzzle, optic, tmp, sightHeight: SIGHT[G.optic], len: L };
+  g.userData = { id: G.id, cls: G.cls, mag, muzzle, optic, tmp, opticType: G.optic, sightHeight: SIGHT[G.optic], len: L };
   const magY = mag.position.y;
   g.userData.magDrop = amt => { mag.position.y = magY - amt; };
   g.userData.boltPull = () => {};
@@ -177,9 +180,9 @@ function upgradeGun(g, src) {
   if (slideB) ud.slideKick = slide(slideB, back, 0.05);
   // 조준경 받침이 총 몸통보다 낮게 묻히는 모델이 있어서, 조준경 자리의 실제 윗면을 재서 그 위로 올림
   if (ud.optic) {
+    // 스코프: 조준경 자리부터 눈 쪽(뒤)까지. 도트사이트: 창 너머 앞쪽 총구까지 전부 (가늠쇠 받침 등이 창 안에 보이지 않게)
     const hs = ud.cls === 'sniper' ? 0.18 : 0.06, oz = ud.optic.position.z;
-    // 조준경 자리부터 눈 쪽(뒤)까지: 뒤쪽이 더 높으면 조준선을 가리므로
-    const top = topNear(model, g, oz - hs, 9, ['rear sights', 'front sights']);
+    const top = topNear(model, g, ud.opticType === 'dot' ? -9 : oz - hs, 9, ['rear sights', 'front sights']);
     if (top > 0.002) { ud.optic.position.y += top; ud.sightHeight += top; }
   }
   else ud.sightHeight = topNear(model, g, -9, 9, []) + 0.004;   // 가늠자: 총에서 가장 높은 곳이 조준선
