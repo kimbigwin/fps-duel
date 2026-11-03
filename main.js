@@ -134,6 +134,25 @@ function setMuted(v) {
   document.querySelectorAll('.muteBtn').forEach(b => { b.textContent = v ? '🔇 소리 꺼짐 (M)' : '🔊 소리 켜짐 (M)'; b.classList.toggle('off', v); });
 }
 document.querySelectorAll('.muteBtn').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); setMuted(!muted); }));
+// ---- 설정: 마우스 감도, 시야(FOV). 브라우저에 기억 ----
+const loadNum = (k, d, lo, hi) => { try { const v = parseFloat(localStorage.getItem(k)); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; } catch { return d; } };
+const settings = { sens: loadNum('fps_sens', 1, 0.2, 3), fov: loadNum('fps_fov', 75, 60, 100) };
+function syncSettings() {
+  document.querySelectorAll('.sensIn').forEach(i => i.value = settings.sens);
+  document.querySelectorAll('.fovIn').forEach(i => i.value = settings.fov);
+  document.querySelectorAll('.sensVal').forEach(b => b.textContent = settings.sens.toFixed(2));
+  document.querySelectorAll('.fovVal').forEach(b => b.textContent = settings.fov + '°');
+}
+document.querySelectorAll('.settingsBox').forEach(box => ['click', 'mousedown', 'pointerdown'].forEach(ev => box.addEventListener(ev, e => e.stopPropagation())));
+document.querySelectorAll('.sensIn').forEach(i => i.addEventListener('input', () => { settings.sens = +i.value; try { localStorage.setItem('fps_sens', settings.sens); } catch {} syncSettings(); }));
+document.querySelectorAll('.fovIn').forEach(i => i.addEventListener('input', () => { settings.fov = +i.value; try { localStorage.setItem('fps_fov', settings.fov); } catch {} syncSettings(); }));
+syncSettings();
+// ---- 조작 안내 ----
+const guide = document.getElementById('guide');
+function showGuide() { guide.classList.remove('hidden'); if (document.pointerLockElement) document.exitPointerLock(); }
+document.querySelectorAll('.guideBtn').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); showGuide(); }));
+document.getElementById('guideClose').addEventListener('click', e => { e.stopPropagation(); guide.classList.add('hidden'); try { localStorage.setItem('fps_guide', '1'); } catch {} });
+guide.addEventListener('click', e => e.stopPropagation());
 function noiseBurst(len, type, freq, gain, decay = 3, when = 0) {
   const a = ac(), t = a.currentTime + when;
   const buf = a.createBuffer(1, Math.max(1, Math.floor(a.sampleRate * len)), a.sampleRate);
@@ -564,7 +583,7 @@ let gunPicking = false, gunSel = null, gunOpts = [];
 const bar = (label, v) => `<span>${label}</span><b><i style="width:${Math.round(v * 100)}%"></i></b>`;
 function showGunPick(m) {
   picking = false; gunPicking = true; gunSel = null; gunOpts = m.opts || [];
-  pickStart = nowS(); pickDur = m.dur || RULES.gunPickTime;
+  pickStart = nowS(); pickDur = m.dur || 0;   // 0 = 시간 제한 없음 (고를 때까지 기다림)
   preloadGuns(gunOpts);
   ui.pickTitle.innerHTML = `<b style="color:#7fd6ff">총 선택</b> <small style="font-size:15px;letter-spacing:1px">고른 증강은 새 총에도 그대로 적용돼요</small>`;
   ui.cards.innerHTML = ''; ui.cards.dataset.tier = 'gun';
@@ -645,6 +664,7 @@ function onMessage(m) {
       ui.pause.classList.remove('hidden');
       ui.pauseText.textContent = gameMode === 'run' ? '로그라이크 런 · 클릭해서 시작' : mode === 'bot' ? 'AI 봇전 · 클릭해서 시작' : `방 "${m.room}" 입장 완료 · 클릭해서 시작`;
       updateScore(); updateAugBars();
+      if ((() => { try { return !localStorage.getItem('fps_guide'); } catch { return false; } })()) showGuide();
       break;
     case 'join':
       addOther(m); feed(`${m.name} 입장`); updateScore(); break;
@@ -864,7 +884,7 @@ document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('mousemove', e => {
   // 포인터락이 걸린 직후 한두 번 엉뚱하게 튀는 값만 무시 (빠르게 휙 돌리는 정상 움직임은 그대로 받음)
   if (!locked || (performance.now() - lockedAt < 150 && (Math.abs(e.movementX) > 200 || Math.abs(e.movementY) > 200)) || Math.abs(e.movementX) > 3000) return;
-  const sens = 0.0022 * (camera.fov / 75);
+  const sens = 0.0022 * settings.sens * (camera.fov / settings.fov);
   me.yaw -= e.movementX * sens;
   me.pitch = THREE.MathUtils.clamp(me.pitch - e.movementY * sens, -1.5, 1.5);
   swayX += e.movementX * 0.00015; swayY += e.movementY * 0.00015;
@@ -1051,7 +1071,8 @@ function updateHud() {
     if (n !== lastCount && n > 0) { lastCount = n; ui.center.className = ''; void ui.center.offsetWidth; ui.center.className = 'count'; ui.center.textContent = n; sfx.tick(); }
   }
   if (phase === 'pick' || !ui.pick.classList.contains('hidden')) {
-    ui.pickTimer.style.width = Math.max(0, 1 - (now - pickStart) / pickDur) * 100 + '%';
+    ui.pickTimer.parentElement.style.visibility = pickDur > 0 ? 'visible' : 'hidden';
+    if (pickDur > 0) ui.pickTimer.style.width = Math.max(0, 1 - (now - pickStart) / pickDur) * 100 + '%';
   }
   // 증강 쿨타임 표시
   const parts = [];
@@ -1081,7 +1102,7 @@ function updateView(dt) {
   camera.position.set(me.ent.pos.x, me.ent.pos.y + (me.dead ? 0.35 : PLAYER.eye), me.ent.pos.z);
   camera.rotation.set(me.pitch + sy + camKick, me.yaw + sx + camKickYaw, me.dead ? 0.5 : 0);
   const dashing = now < me.dashUntil;
-  const fov = THREE.MathUtils.lerp(75, Wp.fov, me.adsT) + killPunch * 6 + (dashing ? 8 : 0) + firePunch * (me.adsT > 0.5 ? 0.6 : 1.8);
+  const fov = THREE.MathUtils.lerp(settings.fov, Wp.fov, me.adsT) + killPunch * 6 + (dashing ? 8 : 0) + firePunch * (me.adsT > 0.5 ? 0.6 : 1.8);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   // 화면 테두리: 체력 낮음 + 맞을 때 번쩍
   const r = Math.max(0, me.hp) / me.maxHp;

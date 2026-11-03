@@ -21,6 +21,16 @@ button.secondary:hover { background: #435173; }
 .seg button { flex: 1; background: #232a38; color: #c9d1dd; font-weight: 600; padding: 8px; }
 .seg button.on { background: #ff8a3d; color: #111; }
 .msg { margin: 0; min-height: 18px; color: #ff6b6b; font-size: 13px; }
+.settingsBox { display: grid; gap: 6px; margin: 10px 0; font-size: 13px; color: #c9d2e0; }
+.settingsBox label { display: grid; grid-template-columns: 90px 1fr 42px; align-items: center; gap: 8px; margin: 0; }
+.settingsBox input[type=range] { width: 100%; accent-color: #ff8a3d; }
+.settingsBox b { text-align: right; color: #fff; font-weight: 600; }
+#pause .settingsBox { min-width: 300px; text-align: left; }
+#guide { z-index: 60; }
+.guide h2 { margin: 0 0 12px; } .guide h3 { margin: 16px 0 6px; font-size: 15px; color: #ffb27a; }
+.guideGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font-size: 14px; }
+.guide ul { margin: 0; padding-left: 18px; line-height: 1.7; font-size: 14px; color: #d4dbe6; }
+.guide #guideClose { margin-top: 16px; }
 .help { font-size: 12px; color: #7f8899; line-height: 1.6; border-top: 1px solid #2c3445; padding-top: 10px; }
 
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; text-shadow: 0 1px 2px rgba(0, 0, 0, .8); }

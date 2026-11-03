@@ -196,10 +196,9 @@ export class GameRoom {
   // 증강을 고른 뒤 총 3개 중 하나를 골라 2칸 중 하나와 바꾸거나 패스
   startGunPick(p) {
     p.gunOpts = rollGuns(p.loadout, 3);
-    const dur = RULES.gunPickTime;
+    // 사람은 시간 제한 없이 고를 때까지 기다림 (사용자 요청: 시간 초과 자동 패스 없음)
     if (p.autoPick) this.later(0.6 + Math.random() * 0.6, () => this.message(p.id, { t: 'gunpick', pass: true }));
-    else p.send({ t: 'gunpick', opts: p.gunOpts, loadout: p.loadout, dur });
-    this.later(dur, () => { if (this.phase === 'pick' && p.gunOpts) this.message(p.id, { t: 'gunpick', pass: true }); });
+    else p.send({ t: 'gunpick', opts: p.gunOpts, loadout: p.loadout, dur: 0 });
   }
 
   finishPickIfDone() {
