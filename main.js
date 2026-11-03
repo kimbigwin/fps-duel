@@ -322,7 +322,7 @@ function resetLocal() {
   ui.runEnd.classList.add('hidden'); hidePick();
   ui.center.textContent = '';
 }
-$('runAgain').onclick = () => { resetLocal(); startLocal('run'); cvs.requestPointerLock(); };
+$('runAgain').onclick = () => { resetLocal(); startLocal('run'); lockPointer(); };
 $('toLobby').onclick = () => { location.href = location.pathname; };
 
 // ================= P2P 연결 (PeerJS / WebRTC) =================
@@ -513,7 +513,7 @@ function choose(id, el) {
   ui.reroll.classList.add('hidden');
   // 이어서 총 선택 화면이 뜨므로 포인터는 총 선택 뒤에 다시 잠금
 }
-function hidePick() { picking = false; gunPicking = false; ui.pick.classList.add('hidden'); ui.slotPick.innerHTML = ''; }
+function hidePick() { picking = false; gunPicking = false; ui.pick.classList.add('hidden'); ui.slotPick.innerHTML = ''; refreshPause(); }
 
 // ---------- 총 선택 화면 (증강 뒤) ----------
 let gunPicking = false, gunSel = null, gunOpts = [];
@@ -569,7 +569,7 @@ function endGunPick(msg) {
   gunPicking = false;
   net(msg);
   ui.slotPick.querySelectorAll('button').forEach(b => b.disabled = true);
-  cvs.requestPointerLock();
+  lockPointer();
 }
 function chooseSlot(slot) {
   if (!gunSel) return;
@@ -712,6 +712,7 @@ function onMessage(m) {
       showGunPick(m); break;
     case 'gunpicked':
       gunPicking = false;
+      refreshPause();
       setTimeout(() => { if (phase === 'pick') { ui.cards.innerHTML = ''; ui.slotPick.innerHTML = ''; ui.pickWait.classList.remove('hidden'); } }, 600);
       break;
     case 'hp':
@@ -785,11 +786,30 @@ function onMessage(m) {
 
 // ================= 입력 =================
 const cvs = renderer.domElement;
-ui.pause.addEventListener('click', () => cvs.requestPointerLock());
+// 마우스 잠금(포인터 락)은 이 두 함수로만 다룸.
+// 잠금 요청은 클릭/키 입력 직후에만 성공하고, 실패해도 pointerlockchange가 오지 않으므로
+// 실패하면 반드시 '클릭해서 계속' 화면을 띄워서 사용자가 다시 잠글 수 있게 함
+let lockPending = false;
+function refreshPause() {
+  const blocking = picking || gunPicking || !ui.runEnd.classList.contains('hidden');
+  ui.pause.classList.toggle('hidden', locked || lockPending || blocking || !me.id);
+}
+function lockPointer() {
+  if (document.pointerLockElement === cvs) return;
+  lockPending = true;
+  const fail = () => { lockPending = false; refreshPause(); };
+  try { const r = cvs.requestPointerLock(); if (r && r.catch) r.catch(fail); } catch { fail(); }
+  // 응답이 아예 없는 브라우저 대비
+  setTimeout(() => { if (lockPending && !locked) fail(); }, 1500);
+}
+ui.pause.addEventListener('click', lockPointer);
+// 혹시 안내 화면이 안 보여도 게임 화면을 클릭하면 다시 잠금
+cvs.addEventListener('click', () => { if (!locked && me.id && !picking && !gunPicking && ui.runEnd.classList.contains('hidden')) lockPointer(); });
+document.addEventListener('pointerlockerror', () => { lockPending = false; refreshPause(); });
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === cvs;
-  const blocking = picking || gunPicking || !ui.runEnd.classList.contains('hidden');
-  ui.pause.classList.toggle('hidden', locked || blocking || !me.id);
+  lockPending = false;
+  refreshPause();
   if (!locked) {
     ui.pauseText.textContent = '일시정지 · 클릭해서 계속';
     mouseDown = rightDown = false; Object.keys(keys).forEach(k => keys[k] = false);
