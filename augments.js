@@ -1,4 +1,5 @@
 // 증강 카드 정의 + 효과 계산 (방장 판정과 화면 표시가 같이 씁니다)
+import { applyMods } from './loot.js';
 import { GUNS, DEFAULT_LOADOUT } from './guns.js';
 
 export const TIERS = {
@@ -76,18 +77,19 @@ export function statsFor(augs = []) {
 
 // 증강이 반영된 무기 수치
 // 단발 총(누르고 있어도 한 발만 나가는 총)은 '빠른 격발', 노리쇠/펌프 총은 '저격수의 호흡'이 간격을 줄임
-export function effWeapon(name, stats) {
+// mod: 이 총이 들어 있는 칸의 등급·부착물 (loot.js). 없으면 기본
+export function effWeapon(name, stats, mod) {
   const W = GUNS[name] || GUNS[DEFAULT_LOADOUT[0]];
   let interval = W.interval;
   if (!W.auto && !W.burst) interval *= stats.sniperMul;
   if (W.cycle) interval *= stats.boltMul;
-  return {
+  return applyMods({
     ...W,
     mag: Math.round(W.mag * stats.magMul),
     reload: W.reload * stats.reloadMul,
     interval,
     recoil: W.recoil * stats.recoilMul,
-  };
+  }, mod);
 }
 
 // 이번 증강 선택의 등급 (나와 상대가 같은 등급을 받음)

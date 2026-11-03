@@ -91,8 +91,8 @@ export class Bot {
     this.id = room.join('BOT', msg => this.onMessage(msg), { isBot: true, autoPick: true });
   }
 
-  fullAmmo() { return Object.fromEntries(this.loadout.map(k => [k, effWeapon(k, this.stats).mag])); }
-  W(name) { return effWeapon(name, this.stats); }
+  fullAmmo() { return Object.fromEntries(this.loadout.map(k => [k, this.W(k).mag])); }
+  W(name) { const i = this.loadout.indexOf(name); return effWeapon(name, this.stats, this.kit?.mods[i]); }
 
   // 런 모드면 스테이지 설정을 따름
   stage() { return this.room.mode === 'run' ? stageInfo(this.room.stage) : null; }
@@ -108,7 +108,8 @@ export class Bot {
       if (st) this.cfg = levelCfg(st.level);
     }
     if (m.t === 'augs' && m.id === this.id) { this.augs = m.augs; this.stats = statsFor(m.augs); }
-    if (m.t === 'loadout' && m.id === this.id) { this.loadout = m.loadout; this.weapon = this.loadout[0]; this.ammo = this.fullAmmo(); this.pendingReload = null; }
+    if (m.t === 'loadout' && m.id === this.id) { this.kit = m.kit; this.loadout = m.loadout; this.weapon = this.loadout[0]; this.ammo = this.fullAmmo(); this.pendingReload = null; }
+    if (m.t === 'buff' && m.id === this.id) { this.buffUntil = performance.now() / 1000 + m.dur; this.buffSpeed = m.speed; }
     if (m.t === 'phase' && m.phase === 'live') this.waitUntil = performance.now() / 1000 + 0.25;
     if (m.t === 'kill' && m.victim === this.id) this.dead = true;
     if (m.t === 'hit' && m.target === this.id && m.from) {
@@ -143,6 +144,12 @@ export class Bot {
       if (now > this.reloadUntil) this.weapon = st?.weapon || (dist > 24 && this.ammo[far] > 0 ? far : near);
       // 유령 증강으로 투명해진 상대는 못 봄
       const ghosted = (t.ghostUntil || 0) > Date.now() / 1000;
+      // 소모품: 안 보일 때 체력이 낮으면 구급 키트, 싸우는 중 많이 맞았으면 아드레날린
+      const selfP = this.room.players.get(this.id), items = this.kit?.items;
+      if (selfP && items && now > (this.nextUse || 0)) {
+        if (!visible && selfP.hp < 55 && items.heal > 0) { this.room.message(this.id, { t: 'use', item: 'heal' }); this.nextUse = now + 3; }
+        else if (visible && selfP.hp < 45 && items.adren > 0) { this.room.message(this.id, { t: 'use', item: 'adren' }); this.nextUse = now + 3; }
+      }
 
       if (visible && !ghosted) {
         this.seeTime += dt;
@@ -165,7 +172,7 @@ export class Bot {
         const Wn = this.W(this.weapon), close = Wn.range && Wn.range[0] <= 8;
         input.f = st?.rush || close ? (dist > 4 ? 1 : 0) : dist > 18 ? 1 : dist < 8 ? -0.6 : 0;
         input.yaw = this.yaw;
-        input.speed = MOVE.walk * this.stats.speedMul * (st?.rush ? 1.15 : 1);
+        input.speed = MOVE.walk * this.stats.speedMul * (st?.rush ? 1.15 : 1) * (now < (this.buffUntil || 0) ? this.buffSpeed : 1);
 
         // 사격
         const W = this.W(this.weapon);

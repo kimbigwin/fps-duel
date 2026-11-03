@@ -11,6 +11,7 @@ import {
 import { makeGun, makeSoldier, setXray, preloadGuns } from './models.js';
 import { loadHuman, humanReady, Human } from './character.js';
 import { TIERS, CURSE_COLOR, augText, statsFor, effWeapon, RUN } from './augments.js';
+import { GRADES, PARTS, PART_KINDS, partEffect, partName, ARMOR, ITEMS, MAX_ITEMS, cardTitle, cardDesc, cardIcon, newKit } from './loot.js';
 
 // ================= 상태 =================
 const me = {
@@ -21,6 +22,7 @@ const me = {
   reloadStart: 0, reloadUntil: 0, switchUntil: 0, lastFire: 0, ads: false, adsT: 0, boltT: 0, bloom: 0,
   doubleUsed: false, dashReadyAt: 0, dashUntil: 0, dashDir: null, lastShiftTap: 0, streak: 0,
   ghostUntil: 0, invulnUntil: 0,
+  kit: newKit(), gold: 0, usingUntil: 0, usingItem: null, usingLen: 1, buffUntil: 0, buffSpeed: 1,
 };
 // id -> { name, mesh, target, yaw, pitch, w, dead, deadT, speed, augs, flinch, fallSign, ghostUntil, revealUntil, air }
 const others = new Map();
@@ -43,10 +45,12 @@ const ui = {
   banner: $('banner'), dmg: $('dmgLayer'), opAugs: $('opAugs'), myAugs: $('myAugs'), cool: $('cooldowns'),
   pick: $('pick'), pickTitle: $('pickTitle'), pickTimer: $('pickTimer').firstElementChild, cards: $('cards'),
   reroll: $('rerollBtn'), pickWait: $('pickWait'), slotPick: $('slotPick'),
+  kit: $('kit'), useBar: $('useBar'),
   runEnd: $('runEnd'), runEndTitle: $('runEndTitle'), runEndText: $('runEndText'), runEndAugs: $('runEndAugs'),
 };
 
-const W = name => effWeapon(name, me.stats); // 증강 반영된 무기 수치
+// 증강 + 그 총이 든 칸의 등급·부착물 반영된 무기 수치
+const W = name => effWeapon(name, me.stats, me.kit.mods[me.loadout.indexOf(name)]);
 
 // ================= 1인칭 무기 =================
 const viewRoot = new THREE.Group(); viewScene.add(viewRoot);
@@ -226,12 +230,13 @@ const LOUD = { rifle: 0.95, ak: 0.95, sniper: 1, shotgun: 1, pistol: 0.8 };
 const BODY = { ar: [120, 42, 0.13, 0.75, 0.3], br: [105, 38, 0.17, 0.85, 0.35], dmr: [100, 36, 0.2, 0.9, 0.4], smg: [140, 50, 0.09, 0.55, 0.22], pistol: [150, 55, 0.1, 0.6, 0.25], sg: [85, 30, 0.3, 1.0, 0.45], sniper: [75, 26, 0.38, 1.0, 0.55] };
 const sfx = {
   // 총소리: 총마다 녹음 묶음 + 재생 속도가 다름. far = 상대가 쏜 소리 (작고 먹먹하게)
-  gun(id, far) {
-    const W = G(id), set = W.snd, r = W.rate * (0.97 + Math.random() * 0.06), L = LOUD[set] || 0.9;
+  // quiet = 소음기: 작고 둔한 소리, 공기 터짐 없음
+  gun(id, far, quiet) {
+    const W = G(id), set = W.snd, r = W.rate * (0.97 + Math.random() * 0.06), L = (LOUD[set] || 0.9) * (quiet ? (far ? 0.3 : 0.5) : 1);
     const B = BODY[W.cls] || BODY.ar;
-    if (play(set, far ? { gain: L * 0.42, rate: r, lowpass: set === 'sniper' ? 1800 : 2200, send: B[4] * 1.4 } : { gain: L, rate: r, send: B[4] })) {
-      thump(B[0], B[1], B[2], B[3] * (far ? 0.35 : 1), 0, B[4]);
-      if (!far) noiseBurst(0.035, 'highpass', 2800, 0.35, 5);   // 총구 앞 '딱' 하는 공기 터짐
+    if (play(set, far || quiet ? { gain: L * (far ? 0.42 : 1), rate: r, lowpass: quiet ? 1100 : set === 'sniper' ? 1800 : 2200, send: B[4] * (quiet ? 0.5 : 1.4) } : { gain: L, rate: r, send: B[4] })) {
+      thump(B[0], B[1], B[2], B[3] * (far ? 0.35 : 1) * (quiet ? 0.6 : 1), 0, B[4]);
+      if (!far && !quiet) noiseBurst(0.035, 'highpass', 2800, 0.35, 5);   // 총구 앞 '딱' 하는 공기 터짐
       return;
     }
     const k = far ? 0.35 : 1;
@@ -260,6 +265,9 @@ const sfx = {
   go() { tone(660, 0.1, 0.2, 0, 'square'); tone(1320, 0.3, 0.2, 0.08, 'square'); },
   card() { if (!play('ui_switch', { gain: 0.6 })) noiseBurst(0.12, 'bandpass', 2400, 0.15, 2); },
   hover() { play('ui_hover', { gain: 0.4 }); },
+  use(item) { noiseBurst(0.12, 'bandpass', item === 'heal' ? 1200 : 2600, 0.3, 3); },
+  used(item) { tone(item === 'heal' ? 520 : 780, 0.12, 0.12, 0, 'sine'); tone(item === 'heal' ? 780 : 1170, 0.18, 0.1, 0.07, 'sine'); },
+  buy() { play('ui_switch', { gain: 0.5 }); tone(990, 0.08, 0.1, 0, 'sine'); tone(1480, 0.12, 0.08, 0.05, 'sine'); },
   click() { play('ui_click', { gain: 0.6 }); },
   pick(tier) {
     const base = { silver: [523, 659, 784], gold: [523, 659, 784, 1047], prism: [523, 659, 784, 1047, 1319, 1568], curse: [440, 415, 392, 311] }[tier] || [523];
@@ -284,11 +292,30 @@ function updateHp() {
 function updateAmmo() {
   const Wp = W(me.weapon), n = me.ammo[me.weapon] ?? Wp.mag;
   ui.wname.textContent = Wp.name;
+  ui.wname.style.color = Wp.grade ? GRADES[Wp.grade].color : '';
   ui.ammo.textContent = n;
   ui.ammo.classList.toggle('low', n <= Math.ceil(Wp.mag * 0.2));
   ui.ammomax.textContent = ` / ${Wp.mag}`;
-  const html = me.loadout.map((id, i) => `<span class="${i === me.slot ? 'on' : ''}">${i + 1} ${escapeHtml(G(id).name)}</span>`).join('');
+  const html = me.loadout.map((id, i) => `<span class="${i === me.slot ? 'on' : ''}" style="--g:${GRADES[me.kit.mods[i].grade | 0].color}">${i + 1} ${escapeHtml(G(id).name)}${partTags(i)}</span>`).join('');
   if (ui.slotBox.innerHTML !== html) ui.slotBox.innerHTML = html;
+  updateKit();
+}
+// 칸에 붙은 부착물 짧은 표시
+const PART_TAG = { mag: '탄', muz: '소', grip: '손', optic: '조' };
+function partTags(slot) {
+  const parts = me.kit.mods[slot].parts || {};
+  const t = PART_KINDS.filter(k => parts[k]).map(k => `${PART_TAG[k]}${parts[k]}`).join(' ');
+  return t ? ` <em>${t}</em>` : '';
+}
+// 방어구·소모품·골드 표시
+function updateKit() {
+  const k = me.kit, a = [];
+  if (k.armor.helmet) a.push(`<span class="arm">헬멧 Lv${k.armor.helmet}</span>`);
+  if (k.armor.vest) a.push(`<span class="arm">조끼 Lv${k.armor.vest}</span>`);
+  for (const id in ITEMS) a.push(`<span class="item${k.items[id] ? '' : ' none'}"><kbd>${ITEMS[id].key}</kbd>${ITEMS[id].name} ${k.items[id] | 0}</span>`);
+  if (gameMode === 'run') a.push(`<span class="gold">${me.gold} G</span>`);
+  const html = a.join('');
+  if (ui.kit.innerHTML !== html) ui.kit.innerHTML = html;
 }
 function opponent() { return [...others.entries()][0]; }
 function updateScore() {
@@ -381,7 +408,7 @@ function resetLocal() {
   hostGame?.dispose(); hostGame = null; bot = null;
   for (const o of others.values()) scene.remove(o.mesh);
   others.clear();
-  me.id = 0; me.augs = []; me.stats = statsFor([]); scores = {}; matchOver = false; stage = null;
+  me.id = 0; me.augs = []; me.stats = statsFor([]); me.kit = newKit(); me.gold = 0; scores = {}; matchOver = false; stage = null;
   ui.runEnd.classList.add('hidden'); hidePick();
   ui.center.textContent = '';
 }
@@ -516,7 +543,7 @@ function resetLoadout() {
   me.ammo = Object.fromEntries(me.loadout.map(id => [id, W(id).mag]));
   me.weapon = me.loadout[me.slot] || me.loadout[0]; me.burstLeft = 0;
   me.reloadStart = 0; me.reloadUntil = 0; me.switchUntil = 0; me.ads = false; me.boltT = 0; me.pendingReload = null;
-  me.dashReadyAt = 0; me.doubleUsed = false; me.ghostUntil = 0; me.invulnUntil = 0;
+  me.dashReadyAt = 0; me.doubleUsed = false; me.ghostUntil = 0; me.invulnUntil = 0; me.usingUntil = 0; me.buffUntil = 0;
   ui.reload.textContent = '';
   updateAmmo();
 }
@@ -576,22 +603,23 @@ function choose(id, el) {
   ui.reroll.classList.add('hidden');
   // 이어서 총 선택 화면이 뜨므로 포인터는 총 선택 뒤에 다시 잠금
 }
-function hidePick() { picking = false; gunPicking = false; ui.pick.classList.add('hidden'); ui.slotPick.innerHTML = ''; refreshPause(); }
+function hidePick() { picking = false; gunPicking = false; lootPicking = false; shopping = false; ui.pick.classList.add('hidden'); ui.slotPick.innerHTML = ''; refreshPause(); }
 
 // ---------- 총 선택 화면 (증강 뒤) ----------
 let gunPicking = false, gunSel = null, gunOpts = [];
 const bar = (label, v) => `<span>${label}</span><b><i style="width:${Math.round(v * 100)}%"></i></b>`;
 function showGunPick(m) {
-  picking = false; gunPicking = true; gunSel = null; gunOpts = m.opts || [];
+  picking = false; gunPicking = true; gunSel = null; gunOpts = (m.opts || []).map(o => typeof o === 'string' ? { id: o, grade: 0 } : o);
   pickStart = nowS(); pickDur = m.dur || 0;   // 0 = 시간 제한 없음 (고를 때까지 기다림)
-  preloadGuns(gunOpts);
-  ui.pickTitle.innerHTML = `<b style="color:#7fd6ff">총 선택</b> <small style="font-size:15px;letter-spacing:1px">고른 증강은 새 총에도 그대로 적용돼요</small>`;
+  preloadGuns(gunOpts.map(o => o.id));
+  ui.pickTitle.innerHTML = `<b style="color:#7fd6ff">총 선택</b> <small style="font-size:15px;letter-spacing:1px">증강과 칸에 붙은 부착물은 새 총에도 그대로 적용돼요</small>`;
   ui.cards.innerHTML = ''; ui.cards.dataset.tier = 'gun';
-  gunOpts.forEach((id, i) => {
-    const Wg = GUNS[id], b = gunBars(Wg);
+  gunOpts.forEach(({ id, grade }, i) => {
+    const Wg = GUNS[id], b = gunBars(Wg), Gr = GRADES[grade] || GRADES[0];
     const c = document.createElement('div');
     c.className = 'card gun';
-    c.innerHTML = `<div class="tier">${escapeHtml(CLASSES[Wg.cls])}</div><div class="gunimg" style="background-image:url(assets/ui/guns/${id}.png)"></div>`
+    c.style.setProperty('--c', Gr.color);
+    c.innerHTML = `<div class="tier">${Gr.name} · ${escapeHtml(CLASSES[Wg.cls])}${grade ? ` <small>데미지 +${Math.round((Gr.dmg - 1) * 100)}%${Gr.syn > 1 ? ` · 증강 시너지 +${Math.round((Gr.syn - 1) * 100)}%` : ''}</small>` : ''}</div><div class="gunimg" style="background-image:url(assets/ui/guns/${id}.png)"></div>`
       + `<div class="name">${escapeHtml(Wg.name)}</div><div class="line"></div><div class="desc">${escapeHtml(Wg.desc)}</div>`
       + `<div class="bars">${bar('데미지', b.dmg)}${bar('화력', b.rate)}${bar('사거리', b.range)}${bar('이동', b.move)}</div>`
       + `<div class="spec">탄창 ${Wg.mag} · 재장전 ${Wg.reload}초${Wg.pellets ? ` · 산탄 ${Wg.pellets}알` : ''}${Wg.burst ? ` · ${Wg.burst}점사` : Wg.auto ? ' · 연사' : ' · 단발'}</div>`
@@ -611,7 +639,8 @@ function renderSlots() {
   ui.slotPick.innerHTML = '';
   me.loadout.forEach((id, i) => {
     const btn = document.createElement('button');
-    btn.textContent = gunSel ? `${i + 1}번 칸 ${G(id).name} → ${G(gunSel).name}` + ' (' + (i + 1) + '번 키)' : `${i + 1}번 칸: ${G(id).name}`;
+    const parts = me.kit.mods[i].parts || {}, np = PART_KINDS.filter(k => parts[k]).length;
+    btn.textContent = (gunSel ? `${i + 1}번 칸 ${G(id).name} → ${G(gunSel).name}` + ' (' + (i + 1) + '번 키)' : `${i + 1}번 칸: ${G(id).name}`) + (np ? ` · 부착물 ${np}개 유지` : '');
     btn.disabled = !gunSel;
     btn.onclick = () => chooseSlot(i);
     ui.slotPick.appendChild(btn);
@@ -623,15 +652,132 @@ function renderSlots() {
 }
 function selectGun(i) {
   if (!gunPicking || !gunOpts[i]) return;
-  gunSel = gunOpts[i]; sfx.click();
+  gunSel = gunOpts[i].id; sfx.click();
   [...ui.cards.children].forEach((c, k) => c.classList.toggle('sel', k === i));
   renderSlots();
 }
+// 총을 고르면 이어서 파밍(대결: 카드 3장, 런: 상점)이 바로 뜸. 포인터는 파밍이 끝날 때 잠금
 function endGunPick(msg) {
   if (!gunPicking) return;
   gunPicking = false;
-  net(msg);
   ui.slotPick.querySelectorAll('button').forEach(b => b.disabled = true);
+  net(msg);
+}
+
+// ---------- 파밍 (대결: 카드 3장 중 1장) / 상점 (런) ----------
+let lootPicking = false, shopping = false, lootOpts = [], lootSel = -1;
+const LV_COLOR = ['#b8c0cc', '#5fd38a', '#5aa8ff', '#c77dff'];
+const cardColor = c => c.kind === 'item' ? '#ffd166' : LV_COLOR[c.lv] || LV_COLOR[1];
+// 부착물 카드: 칸마다 실제로 붙을 효과 (안 맞는 총이면 바뀐 효과)
+function slotEffects(c) {
+  return me.loadout.map((id, i) => {
+    const e = partEffect(c.part, c.lv, W(id)), cur = me.kit.mods[i].parts?.[c.part] | 0;
+    return { i, id, e, cur };
+  });
+}
+function lootCard(c, i, extra = '') {
+  const el = document.createElement('div');
+  el.className = 'card loot' + (c.sold ? ' sold' : '');
+  el.style.setProperty('--c', cardColor(c));
+  el.style.setProperty('--icon', `url(assets/ui/${cardIcon(c)}.png)`);
+  const kindName = c.kind === 'part' ? '부착물' : c.kind === 'armor' ? '방어구' : '소모품';
+  let desc = escapeHtml(cardDesc(c));
+  if (c.kind === 'part') desc += '<div class="eff">' + slotEffects(c).map(s => `<div${s.e.conv ? ' class="conv"' : ''}><b>${s.i + 1}번 ${escapeHtml(G(s.id).name)}</b> ${escapeHtml(s.e.label)}${s.e.conv ? ' <i>바뀐 효과</i>' : ''}</div>`).join('') + '</div>';
+  if (c.kind === 'armor' && me.kit.armor[c.part] >= c.lv) desc += `<div class="eff warn">이미 Lv${me.kit.armor[c.part]} 있음 (효과 없음)</div>`;
+  if (c.kind === 'item' && me.kit.items[c.part] >= MAX_ITEMS) desc += `<div class="eff warn">최대 ${MAX_ITEMS}개까지</div>`;
+  el.innerHTML = `<div class="tier">${kindName}${c.lv ? ' · Lv' + c.lv : ''}</div><div class="gem"><i></i></div><div class="name">${escapeHtml(cardTitle(c))}</div><div class="line"></div><div class="desc">${desc}</div>${extra}<div class="key">${i + 1}번 키 또는 클릭</div>`;
+  el.onmouseenter = () => sfx.hover();
+  return el;
+}
+function showLoot(m) {
+  picking = false; gunPicking = false; lootPicking = true; shopping = false; lootSel = -1; lootOpts = m.opts || [];
+  if (m.kit) me.kit = m.kit;
+  ui.pickTitle.innerHTML = `<b style="color:#ffd166">파밍</b> <small style="font-size:15px;letter-spacing:1px">1장 고르기 · 부착물은 칸에 붙어서 총을 바꿔도 따라가요</small>`;
+  ui.cards.innerHTML = ''; ui.cards.dataset.tier = 'loot';
+  lootOpts.forEach((c, i) => { const el = lootCard(c, i); el.onclick = () => selectLoot(i); ui.cards.appendChild(el); });
+  renderLootSlots();
+  ui.reroll.classList.add('hidden'); ui.pickWait.classList.add('hidden'); ui.pick.classList.remove('hidden');
+  sfx.card();
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+// 아래 버튼: 부착물을 고르면 1번/2번 칸, 그 밖에는 패스(또는 상점 끝내기)
+function renderLootSlots() {
+  ui.slotPick.innerHTML = '';
+  const list = shopping ? shopItems : lootOpts, c = list[lootSel];
+  if (c?.kind === 'part') {
+    for (const s of slotEffects(c)) {
+      const btn = document.createElement('button');
+      btn.textContent = `${s.i + 1}번 칸 ${G(s.id).name}: ${s.e.label}${s.cur ? ` (지금 ${partName(c.part, s.cur)} 교체)` : ''} (${s.i + 1}번 키)`;
+      btn.onclick = () => lootSlot(s.i);
+      ui.slotPick.appendChild(btn);
+    }
+  } else if (!shopping) {
+    const hint = document.createElement('button'); hint.disabled = true; hint.textContent = '카드를 고르세요';
+    ui.slotPick.appendChild(hint);
+  }
+  const pass = document.createElement('button');
+  pass.className = 'pass';
+  pass.textContent = shopping ? '다음 스테이지로 (Enter)' : '패스 · 안 받기 (X 키)';
+  pass.onclick = shopping ? endShop : () => endLoot({ t: 'loot', pass: true });
+  ui.slotPick.appendChild(pass);
+}
+function selectLoot(i) {
+  const list = shopping ? shopItems : lootOpts, c = list[i];
+  if (!c || (!lootPicking && !shopping)) return;
+  if (shopping && (c.sold || me.gold < c.price || (c.kind === 'armor' && me.kit.armor[c.part] >= c.lv) || (c.kind === 'item' && me.kit.items[c.part] >= MAX_ITEMS))) { sfx.empty(); return; }
+  sfx.click();
+  if (c.kind !== 'part') {   // 방어구·소모품은 바로
+    if (shopping) { net({ t: 'buy', i }); sfx.buy(); lootSel = -1; renderLootSlots(); return; }
+    lootSel = i; return finishLootChoice(undefined);
+  }
+  lootSel = i;
+  [...ui.cards.children].forEach((el, k) => el.classList.toggle('sel', k === i));
+  renderLootSlots();
+}
+function lootSlot(slot) {
+  if (lootSel < 0) return;
+  if (shopping) { net({ t: 'buy', i: lootSel, slot }); sfx.buy(); lootSel = -1; [...ui.cards.children].forEach(el => el.classList.remove('sel')); renderLootSlots(); return; }
+  finishLootChoice(slot);
+}
+function finishLootChoice(slot) {
+  const el = ui.cards.children[lootSel];
+  [...ui.cards.children].forEach(c => { if (c !== el) c.style.opacity = 0.25; });
+  el?.classList.add('chosen'); sfx.pick('gold');
+  endLoot({ t: 'loot', i: lootSel, slot });
+}
+function endLoot(msg) {
+  if (!lootPicking) return;
+  if (msg.pass) { sfx.click(); [...ui.cards.children].forEach(c => c.style.opacity = 0.25); }
+  lootPicking = false;
+  ui.slotPick.querySelectorAll('button').forEach(b => b.disabled = true);
+  net(msg);
+  lockPointer();   // 클릭/키 입력 안에서 잠가야 브라우저가 허락함
+}
+// 런 상점
+let shopItems = [];
+function showShop(m) {
+  shopItems = m.items || []; me.gold = m.gold ?? me.gold;
+  if (m.open) { picking = false; gunPicking = false; lootPicking = false; shopping = true; lootSel = -1; sfx.card(); if (document.pointerLockElement) document.exitPointerLock(); }
+  if (!shopping) return;
+  ui.pickTitle.innerHTML = `<b style="color:#ffd166">상점</b> <small style="font-size:15px;letter-spacing:1px">보유 <b style="color:#ffd166">${me.gold} G</b> · 스테이지를 깰 때마다 골드를 얻어요</small>`;
+  ui.cards.innerHTML = ''; ui.cards.dataset.tier = 'loot';
+  shopItems.forEach((c, i) => {
+    const el = lootCard(c, i, `<div class="price${me.gold < c.price && !c.sold ? ' poor' : ''}">${c.sold ? '구매 완료' : c.price + ' G'}</div>`);
+    el.classList.add('shop');
+    if (!c.sold && me.gold < c.price) el.classList.add('poor');
+    el.style.animationDelay = m.open ? '' : '0s';
+    el.onclick = () => selectLoot(i);
+    ui.cards.appendChild(el);
+  });
+  renderLootSlots();
+  ui.reroll.classList.add('hidden'); ui.pickWait.classList.add('hidden'); ui.pick.classList.remove('hidden');
+  updateKit();
+}
+function endShop() {
+  if (!shopping) return;
+  shopping = false; sfx.click();
+  ui.slotPick.querySelectorAll('button').forEach(b => b.disabled = true);
+  net({ t: 'shopdone' });
   lockPointer();
 }
 function chooseSlot(slot) {
@@ -654,6 +800,7 @@ function onMessage(m) {
     case 'welcome':
       me.id = m.id;
       if (m.loadout) { me.loadout = m.loadout; me.slot = 0; }
+      me.kit = m.kit || newKit(); me.gold = 0;
       gameMode = m.mode || 'duel'; winRounds = m.winRounds || RULES.winRounds;
       respawnMe(m);
       m.others.forEach(addOther);
@@ -680,7 +827,7 @@ function onMessage(m) {
         if (gameMode !== 'run') banner(`ROUND ${roundNo}`);
       }
       if (phase === 'live') { ui.center.className = 'count'; ui.center.textContent = 'FIGHT!'; sfx.go(); setTimeout(() => { if (phase === 'live' && ui.center.textContent === 'FIGHT!') { ui.center.textContent = ''; ui.center.className = ''; } }, 700); }
-      if (phase === 'pick' && !picking && !gunPicking) { ui.pick.classList.remove('hidden'); ui.cards.innerHTML = ''; ui.pickTitle.textContent = '증강 선택 중'; ui.reroll.classList.add('hidden'); ui.pickWait.classList.remove('hidden'); pickStart = nowS(); pickDur = m.dur; }
+      if (phase === 'pick' && !picking && !gunPicking && !lootPicking && !shopping) { ui.pick.classList.remove('hidden'); ui.cards.innerHTML = ''; ui.pickTitle.textContent = '증강 선택 중'; ui.reroll.classList.add('hidden'); ui.pickWait.classList.remove('hidden'); pickStart = nowS(); pickDur = m.dur; }
       if (phase === 'waiting') hidePick();
       updateScore();
       break;
@@ -713,8 +860,8 @@ function onMessage(m) {
       else {
         const o = others.get(m.id);
         from = o3.clone();
-        if (o) { o.mesh.userData.getGun(o.w).userData.muzzle.getWorldPosition(from); if (o.mesh.visible) muzzleFlash(from, cls === 'sniper' ? 1.1 : cls === 'sg' ? 1.0 : cls === 'pistol' ? 0.5 : 0.75, m.rays?.[0] ? new THREE.Vector3(...m.rays[0].end).sub(from).normalize() : null); }
-        sfx.gun(m.w, true);
+        if (o) { o.mesh.userData.getGun(o.w).userData.muzzle.getWorldPosition(from); if (o.mesh.visible) muzzleFlash(from, (cls === 'sniper' ? 1.1 : cls === 'sg' ? 1.0 : cls === 'pistol' ? 0.5 : 0.75) * (m.q ? 0.35 : 1), m.rays?.[0] ? new THREE.Vector3(...m.rays[0].end).sub(from).normalize() : null); }
+        sfx.gun(m.w, true, !!m.q);
       }
       let sounded = false;
       for (const r of m.rays || []) {
@@ -767,20 +914,37 @@ function onMessage(m) {
     case 'loadout':
       if (m.id === me.id) {
         me.loadout = m.loadout;
+        if (m.kit) me.kit = m.kit;
+        if (m.gold !== undefined) me.gold = m.gold;
         for (const id of me.loadout) if (!(id in me.ammo)) me.ammo[id] = W(id).mag;
+        if (shopping || lootPicking) for (const id of me.loadout) me.ammo[id] = W(id).mag;   // 고르는 중엔 다음 라운드에 어차피 가득
         me.weapon = me.loadout[me.slot] || me.loadout[0];
         preloadGuns(me.loadout); updateAmmo();
-      } else { const o = others.get(m.id); if (o) { o.w = m.loadout[0]; o.mesh.userData.setWeapon(o.w); } }
+      } else { const o = others.get(m.id); if (o) { o.w = m.loadout[0]; o.kit = m.kit; o.mesh.userData.setWeapon(o.w); } }
       break;
     case 'gunpick':
       showGunPick(m); break;
     case 'gunpicked':
-      gunPicking = false;
+      gunPicking = false;   // 이어서 'loot' 또는 'shop'이 옴
+      break;
+    case 'loot':
+      showLoot(m); break;
+    case 'shop':
+      showShop(m); break;
+    case 'lootpicked':
+      lootPicking = false; shopping = false;
       refreshPause();
-      setTimeout(() => { if (phase === 'pick') { ui.cards.innerHTML = ''; ui.slotPick.innerHTML = ''; ui.pickWait.classList.remove('hidden'); } }, 600);
+      setTimeout(() => { if (phase === 'pick' && !picking && !gunPicking && !lootPicking && !shopping) { ui.cards.innerHTML = ''; ui.slotPick.innerHTML = ''; ui.pickTitle.textContent = '상대가 고르는 중'; ui.pickWait.classList.remove('hidden'); } }, 600);
+      break;
+    case 'using':
+      if (m.id === me.id) { me.usingUntil = nowS() + m.dur; me.usingLen = m.dur; me.usingItem = m.item; me.ads = false; sfx.use(m.item); }
+      else { const o = others.get(m.id); if (o) o.usingUntil = nowS() + m.dur; }
+      break;
+    case 'buff':
+      if (m.id === me.id) { me.buffUntil = nowS() + m.dur; me.buffSpeed = m.speed; sfx.used('adren'); feed(`아드레날린: ${m.dur}초 동안 빠르게 + 회복`); }
       break;
     case 'hp':
-      if (m.id === me.id) { me.hp = m.hp; updateHp(); }
+      if (m.id === me.id) { if (m.hp > me.hp && me.usingItem === 'heal' && nowS() >= me.usingUntil - 0.2) { sfx.used('heal'); me.usingItem = null; } me.hp = m.hp; updateHp(); }
       break;
     case 'ghost':
       if (m.id === me.id) { me.ghostUntil = nowS() + m.dur; sfx.ghost(); feed(`유령 발동: ${m.dur}초 투명`); }
@@ -855,7 +1019,7 @@ const cvs = renderer.domElement;
 // 실패하면 반드시 '클릭해서 계속' 화면을 띄워서 사용자가 다시 잠글 수 있게 함
 let lockPending = false, lockedAt = 0;
 function refreshPause() {
-  const blocking = picking || gunPicking || !ui.runEnd.classList.contains('hidden');
+  const blocking = picking || gunPicking || lootPicking || shopping || !ui.runEnd.classList.contains('hidden');
   ui.pause.classList.toggle('hidden', locked || lockPending || blocking || !me.id);
 }
 function lockPointer() {
@@ -868,7 +1032,7 @@ function lockPointer() {
 }
 ui.pause.addEventListener('click', lockPointer);
 // 혹시 안내 화면이 안 보여도 게임 화면을 클릭하면 다시 잠금
-cvs.addEventListener('click', () => { if (!locked && me.id && !picking && !gunPicking && ui.runEnd.classList.contains('hidden')) lockPointer(); });
+cvs.addEventListener('click', () => { if (!locked && me.id && !picking && !gunPicking && !lootPicking && !shopping && ui.runEnd.classList.contains('hidden')) lockPointer(); });
 document.addEventListener('pointerlockerror', () => { lockPending = false; refreshPause(); });
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === cvs;
@@ -912,6 +1076,16 @@ document.addEventListener('keydown', e => {
     else if (n) selectGun(n - 1);
     return;
   }
+  // 파밍 카드 / 상점: 숫자로 카드, 부착물을 고른 뒤엔 1/2 칸, X 패스 / Enter 상점 끝
+  if (lootPicking || shopping) {
+    const n = /^Digit[1-5]$/.test(e.code) ? +e.code.slice(5) : 0;
+    const list = shopping ? shopItems : lootOpts;
+    if (e.code === 'KeyX' && lootPicking) endLoot({ t: 'loot', pass: true });
+    else if ((e.code === 'Enter' || e.code === 'NumpadEnter') && shopping) endShop();
+    else if (list[lootSel]?.kind === 'part' && (n === 1 || n === 2)) lootSlot(n - 1);
+    else if (n) selectLoot(n - 1);
+    return;
+  }
   if (e.code === 'KeyM' && !e.repeat && e.target.tagName !== 'INPUT') setMuted(!muted);
   const first = !keys[e.code];
   keys[e.code] = true;
@@ -921,13 +1095,20 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyR') startReload();
   if (e.code === 'Digit1') switchWeapon(0);
   if (e.code === 'Digit2') switchWeapon(1);
+  if (first) for (const id in ITEMS) if (e.code === 'Digit' + ITEMS[id].key) useItem(id);
 });
+// 소모품: 방장이 개수·시간을 판정. 쓰는 중엔 사격·재장전 불가
+function useItem(id) {
+  if (me.dead || nowS() < me.usingUntil || !(me.kit.items[id] > 0) || !(canAct() || phase === 'countdown')) return;
+  if (id === 'heal' && me.hp >= me.maxHp) { feed('체력이 가득 차 있어요'); return; }
+  net({ t: 'use', item: id });
+}
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('resize', resize);
 
 const nowS = () => performance.now() / 1000;
 const canAct = () => phase === 'live' || phase === 'waiting';
-function busy() { return nowS() < me.reloadUntil || nowS() < me.switchUntil; }
+function busy() { const t = nowS(); return t < me.reloadUntil || t < me.switchUntil || t < me.usingUntil; }
 
 function tryDoubleJump() {
   if (!me.stats.doubleJump || me.ent.onGround || me.doubleUsed || me.dead || !canAct()) return;
@@ -982,7 +1163,7 @@ function curSpread(Wp) {
   return THREE.MathUtils.lerp(hip, ads, me.adsT) + moving * (me.adsT > 0.5 ? 0.0015 : 0.004) + (me.ent.onGround ? 0 : 0.05);
 }
 // 샷건 산탄이 퍼지는 반경(라디안). 정조준하면 30% 모임 (방장 판정과 같은 값)
-const pelletRadius = Wp => (Wp.pelletSpread || 0) * (1 - 0.3 * me.adsT);
+const pelletRadius = Wp => (Wp.pelletSpread || 0) * (Wp.pelletMul ?? 1) * (1 - 0.3 * me.adsT);
 
 // 노리쇠/펌프 동작 시간
 const boltLen = () => { const Wp = W(me.weapon); return Math.min((Wp.cycle === 'pump' ? 0.55 : 0.9) * me.stats.boltMul, Wp.interval * 0.85); };
@@ -1022,16 +1203,16 @@ function tryFire() {
   camKick += (KICK[cls] ?? 0.015) * (me.ads ? 0.7 : 1); camKickYaw += (Math.random() - 0.5) * (KICK[cls] ?? 0.015) * 0.6;
   firePunch = cls === 'sg' || cls === 'sniper' ? 1 : cls === 'dmr' || cls === 'br' ? 0.5 : 0.25;
   // 총구 화염: 2프레임 이상 확실히 보이게
-  const fl = FLAME[cls] ?? 0.32, mt = muzzleTex();
+  const fl = (FLAME[cls] ?? 0.32) * (Wp.quiet ? 0.45 : 1), mt = muzzleTex();
   flameA.material.map = mt; flameA.material.needsUpdate = true;
   flameA.scale.set(fl * 0.55, fl, 1); flameB.scale.set(fl * 0.55, fl, 1);
   flameA.rotation.z = Math.random() * 0.6 - 0.3; flameB.rotation.z = Math.PI / 2 + Math.random() * 0.6 - 0.3;
   flareS.material.map = flareTex(); flareS.scale.setScalar(fl * 0.75); flareS.material.rotation = Math.random() * Math.PI;
   starS.material.map = mt; starS.scale.setScalar(fl * 0.55); starS.material.rotation = Math.random() * Math.PI * 2;
   flashGroup.visible = true; flashUntil = now + 0.06; flashFrames = 3;
-  worldFlash.intensity = cls === 'sg' || cls === 'sniper' ? 80 : 50; worldFlash.position.copy(muzzleWorld());
+  worldFlash.intensity = (cls === 'sg' || cls === 'sniper' ? 80 : 50) * (Wp.quiet ? 0.3 : 1); worldFlash.position.copy(muzzleWorld());
   if (!Wp.auto || Math.random() < 0.35) puff(muzzleWorld(), 0xcfcac0, cls === 'sg' || cls === 'sniper' ? 0.5 : 0.28, 0.5);
-  sfx.gun(me.weapon);
+  sfx.gun(me.weapon, false, Wp.quiet);
   if (Wp.cycle) { sfx.bolt(boltLen()); me.boltT = now; setTimeout(ejectShell, boltLen() * 600); }
   else ejectShell();
   if (me.ammo[me.weapon] === 0) setTimeout(startReload, Wp.cycle ? 900 : 250);
@@ -1050,7 +1231,7 @@ function updateMe(dt) {
     f: act ? (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0) : 0,
     s: act ? (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0) : 0,
     yaw: me.yaw, jump: act && !!keys.Space,
-    speed: (me.ads ? MOVE.ads : running ? MOVE.run : MOVE.walk) * me.stats.speedMul * W(me.weapon).move,
+    speed: (me.ads ? MOVE.ads : running ? MOVE.run : MOVE.walk) * me.stats.speedMul * W(me.weapon).move * (now < me.buffUntil ? me.buffSpeed : 1) * (now < me.usingUntil ? 0.6 : 1),
   };
   if (now < me.dashUntil && me.dashDir) input = { ...input, f: me.dashDir.f, s: me.dashDir.s, speed: 24, accel: 40, jump: false };
   const wasAir = !me.ent.onGround;
@@ -1079,13 +1260,18 @@ function updateHud() {
   if (me.stats.dash) parts.push(now >= me.dashReadyAt ? '<span class="ready">대시 준비</span>' : `대시 ${(me.dashReadyAt - now).toFixed(1)}s`);
   if (me.stats.doubleJump) parts.push(me.doubleUsed ? '이단 점프 사용' : '<span class="ready">이단 점프</span>');
   if (me.stats.revive) parts.push('재생 대기');
+  if (now < me.buffUntil) parts.push(`<span class="ready">아드레날린 ${(me.buffUntil - now).toFixed(0)}s</span>`);
   const html = parts.join('');
   if (ui.cool.innerHTML !== html) ui.cool.innerHTML = html;
+  // 소모품 사용 진행 막대
+  const using = now < me.usingUntil && !me.dead;
+  ui.useBar.classList.toggle('hidden', !using);
+  if (using) { ui.useBar.firstElementChild.textContent = `${ITEMS[me.usingItem]?.name ?? ''} 사용 중`; ui.useBar.lastElementChild.firstElementChild.style.width = (1 - (me.usingUntil - now) / me.usingLen) * 100 + '%'; }
 }
 
 function updateView(dt) {
   const Wp = W(me.weapon), now = nowS();
-  me.adsT = THREE.MathUtils.damp(me.adsT, me.ads ? 1 : 0, 14 * me.stats.adsMul * Wp.ads, dt);
+  me.adsT = THREE.MathUtils.damp(me.adsT, me.ads ? 1 : 0, 14 * me.stats.adsMul * Wp.ads * Wp.adsMul, dt);
   const gun = vGun(me.weapon), cls = Wp.cls;
   const sniperScoped = Wp.optic === 'scope' && me.adsT > 0.85;
 
@@ -1100,9 +1286,11 @@ function updateView(dt) {
   hurtPulse = Math.max(0, hurtPulse - dt * 1.5);
   const sx = (Math.random() - 0.5) * shake * 0.03, sy = (Math.random() - 0.5) * shake * 0.03;
   camera.position.set(me.ent.pos.x, me.ent.pos.y + (me.dead ? 0.35 : PLAYER.eye), me.ent.pos.z);
-  camera.rotation.set(me.pitch + sy + camKick, me.yaw + sx + camKickYaw, me.dead ? 0.5 : 0);
+  // 스코프 흔들림: 저격총 정조준 중 천천히 8자로 흔들림 (조준경 부착물이 바뀐 효과로 줄여 줌). 실제 사격 방향에도 들어감
+  const sway = sniperScoped ? 0.0022 * Wp.swayMul : 0, st = now * 1.1;
+  camera.rotation.set(me.pitch + sy + camKick + Math.sin(st * 2) * sway * 0.5, me.yaw + sx + camKickYaw + Math.sin(st) * sway, me.dead ? 0.5 : 0);
   const dashing = now < me.dashUntil;
-  const fov = THREE.MathUtils.lerp(settings.fov, Wp.fov, me.adsT) + killPunch * 6 + (dashing ? 8 : 0) + firePunch * (me.adsT > 0.5 ? 0.6 : 1.8);
+  const fov = THREE.MathUtils.lerp(settings.fov, Wp.fov * Wp.fovMul, me.adsT) + killPunch * 6 + (dashing ? 8 : 0) + firePunch * (me.adsT > 0.5 ? 0.6 : 1.8);
   if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
   // 화면 테두리: 체력 낮음 + 맞을 때 번쩍
   const r = Math.max(0, me.hp) / me.maxHp;
@@ -1285,4 +1473,4 @@ loop();
 
 // 테스트용 핸들
 setMuted(muted);
-window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
+window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, get lootPicking() { return lootPicking; }, get shopping() { return shopping; }, selectLoot, lootSlot, endShop, useItem, W, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
