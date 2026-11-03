@@ -111,7 +111,7 @@ button.run:hover { filter: brightness(1.12); background: linear-gradient(90deg, 
 .augchips { display: flex; gap: 4px; flex-wrap: wrap; }
 .augchips span { font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 10px; background: rgba(0, 0, 0, .55); border: 1px solid currentColor; text-shadow: none; }
 #opAugs { position: absolute; top: 84px; left: 50%; transform: translateX(-50%); justify-content: center; max-width: 60vw; }
-#myAugs { position: absolute; left: 24px; bottom: 74px; max-width: 40vw; }
+#myAugs { position: absolute; left: 24px; bottom: 104px; max-width: 40vw; }
 #cooldowns { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); font-size: 13px; font-weight: 800; color: #c9d1dd; display: flex; gap: 12px; }
 #cooldowns .ready { color: #6dff9c; }
 
@@ -204,3 +204,13 @@ ul.credits b { color: #fff; }
 #useBar { position: absolute; left: 50%; top: 62%; transform: translateX(-50%); text-align: center; font-size: 13px; font-weight: 800; color: #e8f6ff; }
 #useBar div { width: 180px; height: 6px; margin-top: 5px; background: rgba(255,255,255,.15); border-radius: 3px; overflow: hidden; }
 #useBar i { display: block; height: 100%; width: 0; background: #6dff9c; }
+
+/* ---------- 킬캠 / 라운드 결과 / 전적 ---------- */
+#killcamTag { position: absolute; top: 90px; left: 50%; transform: translateX(-50%); padding: 6px 16px; background: rgba(160, 20, 20, .75); border-radius: 6px; font-size: 15px; font-weight: 700; letter-spacing: 1px; }
+#killcamTag b { color: #fff; margin-right: 8px; letter-spacing: 3px; }
+#roundRes { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); min-width: 320px; padding: 14px 20px; background: rgba(8, 12, 20, .82); border: 1px solid rgba(255,255,255,.12); border-radius: 10px; animation: cardIn .35s ease-out; }
+.rr-title { font-size: 20px; font-weight: 900; letter-spacing: 2px; margin-bottom: 8px; text-align: center; }
+.rr-title.win { color: #6dff9c; } .rr-title.lose { color: #ff7a7a; }
+.rr-grid { display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 14px; text-align: left; }
+.rr-grid span { color: #9fb0c0; } .rr-grid b { color: #fff; }
+#statsBody { margin: 10px 0 16px; }

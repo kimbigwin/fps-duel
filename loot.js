@@ -102,17 +102,21 @@ export const MAX_ITEMS = 3;
 
 // ---------- 파밍 카드 ----------
 // card: { kind:'part', part:'mag', lv } | { kind:'armor', part:'helmet', lv } | { kind:'item', part:'heal' }
+// 런 휴식(3스테이지마다 상점에 무료로 1장): 최대 체력 증가
+export const REST = { name: '휴식', icon: 'plus', hp: 15 };
 export function cardTitle(c) {
+  if (c.kind === 'rest') return REST.name;
   if (c.kind === 'part') return partName(c.part, c.lv);
   if (c.kind === 'armor') return `${ARMOR[c.part].name} Lv${c.lv}`;
   return ITEMS[c.part].name;
 }
 export function cardDesc(c) {
+  if (c.kind === 'rest') return `잠깐 쉬어 갑니다. 최대 체력 +${REST.hp} (런 끝까지 유지)`;
   if (c.kind === 'armor') return `${ARMOR[c.part].what} -${Math.round(ARMOR[c.part].red[c.lv] * 100)}% (경기 끝까지 유지)`;
   if (c.kind === 'item') return `${ITEMS[c.part].desc}. ${ITEMS[c.part].key}번 키로 사용`;
   return '고른 칸에 붙음. 그 칸의 총을 바꿔도 따라감';
 }
-export const cardIcon = c => (c.kind === 'part' ? PARTS : c.kind === 'armor' ? ARMOR : ITEMS)[c.part].icon;
+export const cardIcon = c => c.kind === 'rest' ? REST.icon : (c.kind === 'part' ? PARTS : c.kind === 'armor' ? ARMOR : ITEMS)[c.part].icon;
 // level: 0~3 (뒤로 갈수록 높은 단계가 잘 나옴)
 export function rollLoot(n = 3, level = 0, rnd = Math.random) {
   const out = [], seen = new Set();
@@ -133,6 +137,7 @@ export function rollLoot(n = 3, level = 0, rnd = Math.random) {
 }
 // 런 상점 가격 (골드)
 export function cardPrice(c) {
+  if (c.kind === 'rest') return 0;
   if (c.kind === 'item') return c.part === 'heal' ? 25 : 40;
   return [0, 30, 60, 100][c.lv];
 }

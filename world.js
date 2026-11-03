@@ -57,7 +57,7 @@ sunLight.shadow.bias = -0.0004;
 sunLight.shadow.normalBias = 0.03;
 Object.assign(sunLight.shadow.camera, { left: -38, right: 38, top: 38, bottom: -38, near: 1, far: 150 });
 scene.add(sunLight);
-scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x5a4a3a, 0.45));
+const hemi = new THREE.HemisphereLight(0xcfe3ff, 0x5a4a3a, 0.45); scene.add(hemi);
 
 const vSun = new THREE.DirectionalLight(0xfff1dd, 2.2); vSun.position.set(1, 2, 1); viewScene.add(vSun);
 viewScene.add(new THREE.HemisphereLight(0xcfe3ff, 0x4a4036, 0.6));
@@ -219,24 +219,48 @@ const mats = {
   center: mat(concreteSet('#75787a', 7, 2), 1, 1, { roughness: 0.9 }),
 };
 
-SOLIDS.forEach((a, i) => {
-  const w = a.max[0] - a.min[0], h = a.max[1] - a.min[1], d = a.max[2] - a.min[2];
-  const isWall = i >= BOXES.length;
-  const b = BOXES[i];
-  let m, scale = 4;
-  if (isWall) { m = wallMat; scale = 6; }
-  else if (b.h <= 2) { m = mats.wood; scale = b.w; }
-  else if (b.w <= 1.5) { m = mats.pillar; scale = 1.5; }
-  else if (b.x === 0 && b.z === 0) { m = mats.center; scale = 3; }
-  else { m = [mats.red, mats.blue, mats.green][i % 3]; scale = 3; }
-  const geo = new THREE.BoxGeometry(w, h, d);
-  boxUV(geo, w, h, d, scale);
-  const mesh = new THREE.Mesh(geo, m);
-  mesh.userData.kind = m === mats.wood ? 'wood' : (m === wallMat || m === mats.center) ? 'wall' : 'metal'; // 탄착음 종류
-  mesh.position.set((a.min[0] + a.max[0]) / 2, h / 2, (a.min[2] + a.max[2]) / 2);
-  mesh.castShadow = mesh.receiveShadow = true;
-  scene.add(mesh); mapMeshes.push(mesh);
-});
+// 맵 장애물 메쉬. 맵이 바뀌면 지우고 다시 만듦 (바닥은 그대로)
+const boxMeshes = [];
+const KIND_MAT = { wood: () => mats.wood, pillar: () => mats.pillar, center: () => mats.center };
+export function buildMapMeshes() {
+  for (const m of boxMeshes) { scene.remove(m); m.geometry.dispose(); const k = mapMeshes.indexOf(m); if (k >= 0) mapMeshes.splice(k, 1); }
+  boxMeshes.length = 0;
+  for (const d of decals.splice(0)) scene.remove(d);   // 이전 맵의 탄흔 지우기
+  SOLIDS.forEach((a, i) => {
+    const w = a.max[0] - a.min[0], h = a.max[1] - a.min[1], d = a.max[2] - a.min[2];
+    const isWall = i >= BOXES.length;
+    const b = BOXES[i];
+    let m, scale = 4;
+    if (isWall) { m = wallMat; scale = 6; }
+    else if (b.kind === 'metal') { m = [mats.red, mats.blue, mats.green][i % 3]; scale = 3; }
+    else if (KIND_MAT[b.kind]) { m = KIND_MAT[b.kind](); scale = m === mats.wood ? Math.max(1, Math.min(b.w, b.d, 2.5)) : m === mats.pillar ? 1.5 : 3; }
+    else if (b.h <= 2) { m = mats.wood; scale = b.w; }
+    else if (b.w <= 1.5) { m = mats.pillar; scale = 1.5; }
+    else { m = [mats.red, mats.blue, mats.green][i % 3]; scale = 3; }
+    const geo = new THREE.BoxGeometry(w, h, d);
+    boxUV(geo, w, h, d, scale);
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.userData.kind = m === mats.wood ? 'wood' : (m === wallMat || m === mats.center) ? 'wall' : 'metal'; // 탄착음 종류
+    mesh.position.set((a.min[0] + a.max[0]) / 2, (a.min[1] + a.max[1]) / 2, (a.min[2] + a.max[2]) / 2);
+    mesh.castShadow = mesh.receiveShadow = true;
+    scene.add(mesh); mapMeshes.push(mesh); boxMeshes.push(mesh);
+  });
+  sunLight.shadow.needsUpdate = true;
+}
+// 맵마다 하늘·햇빛 분위기
+const SKIES = [
+  { elev: 58, az: 140, sun: 0xfff1dd, sunI: 2.6, fog: 0x9fb2c4, hemi: 0.45, turb: null },
+  { elev: 80, az: 250, sun: 0xffc48a, sunI: 2.2, fog: 0xc9a98a, hemi: 0.4, turb: 4 },
+  { elev: 48, az: 300, sun: 0xdfe8ff, sunI: 2.0, fog: 0x7f8b9c, hemi: 0.5, turb: 3 },
+];
+export function setSky(i) {
+  const k = SKIES[i] || SKIES[0];
+  const v = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(k.elev), THREE.MathUtils.degToRad(k.az));
+  sky.material.uniforms.sunPosition.value.copy(v);
+  if (k.turb !== null) sky.material.uniforms.turbidity.value = k.turb; else sky.material.uniforms.turbidity.value = 2.2;
+  sunLight.position.copy(v).multiplyScalar(60); sunLight.color.set(k.sun); sunLight.intensity = k.sunI;
+  scene.fog.color.set(k.fog); hemi.intensity = k.hemi;
+}
 
 // ---------- 실사 텍스처 (ambientCG, CC0) ----------
 // 직접 그린 텍스처를 먼저 쓰고, 사진 텍스처가 로드되면 바꿉니다.
@@ -461,3 +485,6 @@ export function updateEffects(dt) {
     }
   }
 }
+
+// 처음 맵 메쉬 (탄흔 목록이 위에서 만들어진 뒤에 호출)
+buildMapMeshes();

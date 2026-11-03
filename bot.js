@@ -1,5 +1,5 @@
 // AI 봇: 방장 브라우저 안에서 GameRoom에 '플레이어'로 참가합니다.
-import { ARENA, lineOfSight } from './map.js';
+import { ARENA, lineOfSight, currentMap } from './map.js';
 import { DEFAULT_LOADOUT } from './guns.js';
 import { SOLIDS, stepMovement, MOVE } from './physics.js';
 import { statsFor, effWeapon, stageInfo } from './augments.js';
@@ -14,10 +14,16 @@ export const DIFFICULTY = {
 // ---------- 내비게이션 그리드 (1m 칸, A*) ----------
 const H = ARENA.half, N = H * 2;
 const blocked = new Uint8Array(N * N);
-for (let gx = 0; gx < N; gx++) for (let gz = 0; gz < N; gz++) {
-  const x = gx - H + 0.5, z = gz - H + 0.5;
-  for (const b of SOLIDS) {
-    if (x > b.min[0] - 0.7 && x < b.max[0] + 0.7 && z > b.min[2] - 0.7 && z < b.max[2] + 0.7) { blocked[gx * N + gz] = 1; break; }
+let gridMap = -1;
+// 맵이 바뀌면 그리드를 다시 만듦
+function ensureGrid() {
+  if (gridMap === currentMap()) return;
+  gridMap = currentMap(); blocked.fill(0);
+  for (let gx = 0; gx < N; gx++) for (let gz = 0; gz < N; gz++) {
+    const x = gx - H + 0.5, z = gz - H + 0.5;
+    for (const b of SOLIDS) {
+      if (x > b.min[0] - 0.7 && x < b.max[0] + 0.7 && z > b.min[2] - 0.7 && z < b.max[2] + 0.7) { blocked[gx * N + gz] = 1; break; }
+    }
   }
 }
 const toCell = v => Math.max(0, Math.min(N - 1, Math.floor(v + H)));
@@ -32,6 +38,7 @@ function nearestFree(gx, gz) {
 }
 
 function findPath(from, to) {
+  ensureGrid();
   const [sx, sz] = nearestFree(toCell(from.x), toCell(from.z));
   const [tx, tz] = nearestFree(toCell(to.x), toCell(to.z));
   const start = sx * N + sz, goal = tx * N + tz;

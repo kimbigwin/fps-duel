@@ -1,9 +1,9 @@
 // 게임 판정 로직: 방장(먼저 들어온 사람) 브라우저에서 실행됩니다.
 // 라운드제: 킬 1번 = 1라운드. 라운드마다 두 사람 모두 서로 안 보이는 먼 곳에서 다시 시작.
-import { RULES, solidAABBs, rayAABB, playerHitboxes, pickSpawnPair, faceCenter } from './map.js';
+import { RULES, solidAABBs, rayAABB, playerHitboxes, pickSpawnPair, faceCenter, setMap, currentMap, MAPS } from './map.js';
 import { statsFor, effWeapon, rollOptions, rollTier, hasCurse, stageInfo, RUN } from './augments.js';
 import { DEFAULT_LOADOUT, rangeMul, rollGuns } from './guns.js';
-import { newKit, rollGrade, rollLoot, cardPrice, ARMOR, ITEMS, MAX_ITEMS } from './loot.js';
+import { newKit, rollGrade, rollLoot, cardPrice, ARMOR, ITEMS, MAX_ITEMS, REST } from './loot.js';
 
 const SOLIDS = solidAABBs();
 const nowS = () => Date.now() / 1000;
@@ -84,7 +84,7 @@ export class GameRoom {
       .map(p => ({ id: p.id, name: p.name, pos: p.pos, yaw: p.yaw, hp: p.hp, dead: p.dead, augs: p.augs, loadout: p.loadout, kit: p.kit }));
     send({
       t: 'welcome', id: me.id, loadout: me.loadout, kit: me.kit, pos: me.pos, yaw: faceCenter(me.pos[0], me.pos[2]), hp: me.hp, maxHp: me.maxHp,
-      room: this.roomName, mode: this.mode, others, scores: this.scores(), winRounds: RULES.winRounds,
+      room: this.roomName, mode: this.mode, map: currentMap(), others, scores: this.scores(), winRounds: RULES.winRounds,
     });
     this.players.forEach(p => p !== me && p.send({ t: 'join', id: me.id, name: me.name, pos: me.pos, yaw: 0, hp: me.hp, augs: me.augs, loadout: me.loadout, kit: me.kit }));
     this.broadcast({ t: 'scores', scores: this.scores() });
@@ -136,6 +136,10 @@ export class GameRoom {
 
   startRound() {
     const list = [...this.players.values()];
+    // 맵: 대결은 라운드마다, 런은 스테이지마다 바뀜
+    const mi = (this.mode === 'run' ? (this.stage || 1) - 1 : this.round) % MAPS.length;
+    setMap(mi);
+    this.broadcast({ t: 'map', i: mi, name: MAPS[mi].name });
     const [a, b] = pickSpawnPair();
     list.forEach((p, i) => {
       const other = list[1 - i];
@@ -227,11 +231,14 @@ export class GameRoom {
   // 런 상점 5칸
   startShop(p) {
     p.shop = rollLoot(5, this.lootLevel()).map(c => ({ ...c, price: cardPrice(c), sold: false }));
+    // 3스테이지마다 휴식 카드(무료) 1장 추가
+    if (this.round % 3 === 0) p.shop.unshift({ kind: 'rest', price: 0, sold: false });
     p.send({ t: 'shop', items: p.shop, gold: p.gold, open: true });
   }
   giveCard(p, c, slot) {
     const kit = structuredClone(p.kit);
     if (c.kind === 'part') { if (slot !== 0 && slot !== 1) return; kit.mods[slot].parts[c.part] = c.lv; }
+    else if (c.kind === 'rest') { p.hpBonus = (p.hpBonus || 0) + REST.hp; }
     else if (c.kind === 'armor') kit.armor[c.part] = Math.max(kit.armor[c.part] | 0, c.lv);
     else kit.items[c.part] = Math.min(MAX_ITEMS, (kit.items[c.part] | 0) + 1);
     p.kit = kit;

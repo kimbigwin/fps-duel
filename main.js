@@ -1,12 +1,12 @@
 import * as THREE from 'three';
-import { PLAYER, RULES } from './map.js';
+import { PLAYER, RULES, MAPS, setMap } from './map.js';
 import { GUNS, DEFAULT_LOADOUT, CLASSES, gunBars } from './guns.js';
 import { GameRoom } from './game.js';
 import { Bot } from './bot.js';
 import { stepMovement, MOVE } from './physics.js';
 import {
   renderer, scene, camera, viewScene, composer, vignette, resize,
-  tracer, sparks, puff, blood, bulletHole, surfaceAt, updateEffects, flashTex, muzzleTex, flareTex, muzzleFlash,
+  tracer, sparks, puff, blood, bulletHole, surfaceAt, updateEffects, flashTex, muzzleTex, flareTex, muzzleFlash, buildMapMeshes, setSky,
 } from './world.js';
 import { makeGun, makeSoldier, setXray, preloadGuns } from './models.js';
 import { loadHuman, humanReady, Human } from './character.js';
@@ -45,7 +45,7 @@ const ui = {
   banner: $('banner'), dmg: $('dmgLayer'), opAugs: $('opAugs'), myAugs: $('myAugs'), cool: $('cooldowns'),
   pick: $('pick'), pickTitle: $('pickTitle'), pickTimer: $('pickTimer').firstElementChild, cards: $('cards'),
   reroll: $('rerollBtn'), pickWait: $('pickWait'), slotPick: $('slotPick'),
-  kit: $('kit'), useBar: $('useBar'),
+  kit: $('kit'), useBar: $('useBar'), killcam: $('killcamTag'), roundRes: $('roundRes'),
   runEnd: $('runEnd'), runEndTitle: $('runEndTitle'), runEndText: $('runEndText'), runEndAugs: $('runEndAugs'),
 };
 
@@ -548,6 +548,7 @@ function resetLoadout() {
   updateAmmo();
 }
 function respawnMe(m) {
+  stopKillcam();
   me.ent.pos.set(...m.pos); me.ent.vel.set(0, 0, 0);
   me.yaw = m.yaw; me.pitch = 0; me.hp = m.hp; me.maxHp = m.maxHp || me.stats.maxHp; me.dead = false;
   ui.center.textContent = ''; ui.center.className = '';
@@ -667,7 +668,7 @@ function endGunPick(msg) {
 // ---------- 파밍 (대결: 카드 3장 중 1장) / 상점 (런) ----------
 let lootPicking = false, shopping = false, lootOpts = [], lootSel = -1;
 const LV_COLOR = ['#b8c0cc', '#5fd38a', '#5aa8ff', '#c77dff'];
-const cardColor = c => c.kind === 'item' ? '#ffd166' : LV_COLOR[c.lv] || LV_COLOR[1];
+const cardColor = c => c.kind === 'item' ? '#ffd166' : c.kind === 'rest' ? '#6dff9c' : LV_COLOR[c.lv] || LV_COLOR[1];
 // 부착물 카드: 칸마다 실제로 붙을 효과 (안 맞는 총이면 바뀐 효과)
 function slotEffects(c) {
   return me.loadout.map((id, i) => {
@@ -680,7 +681,7 @@ function lootCard(c, i, extra = '') {
   el.className = 'card loot' + (c.sold ? ' sold' : '');
   el.style.setProperty('--c', cardColor(c));
   el.style.setProperty('--icon', `url(assets/ui/${cardIcon(c)}.png)`);
-  const kindName = c.kind === 'part' ? '부착물' : c.kind === 'armor' ? '방어구' : '소모품';
+  const kindName = c.kind === 'part' ? '부착물' : c.kind === 'armor' ? '방어구' : c.kind === 'rest' ? '휴식 · 무료' : '소모품';
   let desc = escapeHtml(cardDesc(c));
   if (c.kind === 'part') desc += '<div class="eff">' + slotEffects(c).map(s => `<div${s.e.conv ? ' class="conv"' : ''}><b>${s.i + 1}번 ${escapeHtml(G(s.id).name)}</b> ${escapeHtml(s.e.label)}${s.e.conv ? ' <i>바뀐 효과</i>' : ''}</div>`).join('') + '</div>';
   if (c.kind === 'armor' && me.kit.armor[c.part] >= c.lv) desc += `<div class="eff warn">이미 Lv${me.kit.armor[c.part]} 있음 (효과 없음)</div>`;
@@ -762,7 +763,7 @@ function showShop(m) {
   ui.pickTitle.innerHTML = `<b style="color:#ffd166">상점</b> <small style="font-size:15px;letter-spacing:1px">보유 <b style="color:#ffd166">${me.gold} G</b> · 스테이지를 깰 때마다 골드를 얻어요</small>`;
   ui.cards.innerHTML = ''; ui.cards.dataset.tier = 'loot';
   shopItems.forEach((c, i) => {
-    const el = lootCard(c, i, `<div class="price${me.gold < c.price && !c.sold ? ' poor' : ''}">${c.sold ? '구매 완료' : c.price + ' G'}</div>`);
+    const el = lootCard(c, i, `<div class="price${me.gold < c.price && !c.sold ? ' poor' : ''}">${c.sold ? (c.kind === 'rest' ? '쉬었음' : '구매 완료') : c.price ? c.price + ' G' : '무료'}</div>`);
     el.classList.add('shop');
     if (!c.sold && me.gold < c.price) el.classList.add('poor');
     el.style.animationDelay = m.open ? '' : '0s';
@@ -792,13 +793,24 @@ ui.reroll.onclick = () => { if (picking) net({ t: 'reroll' }); };
 $('creditsBtn').onclick = () => $('credits').classList.remove('hidden');
 $('creditsClose').onclick = () => $('credits').classList.add('hidden');
 
+// 맵 바꾸기 (방장과 같은 브라우저면 데이터는 이미 바뀌어 있으므로 화면만 다시 만듦)
+let builtMap = 0, mapName = MAPS[0].name;
+function applyMap(i) {
+  if (i === undefined || i === null) return;
+  setMap(i); mapName = MAPS[i].name;
+  if (builtMap === i) return;
+  builtMap = i; buildMapMeshes(); setSky(MAPS[i].sky);
+}
 function onMessage(m) {
   switch (m.t) {
+    case 'map':
+      applyMap(m.i); break;
     case 'full':
       lostConnection('방이 가득 찼습니다 (최대 2명). 다른 방 코드를 써 주세요.');
       peer?.destroy(); break;
     case 'welcome':
       me.id = m.id;
+      applyMap(m.map ?? 0);
       if (m.loadout) { me.loadout = m.loadout; me.slot = 0; }
       me.kit = m.kit || newKit(); me.gold = 0;
       gameMode = m.mode || 'duel'; winRounds = m.winRounds || RULES.winRounds;
@@ -823,8 +835,8 @@ function onMessage(m) {
     case 'phase':
       phase = m.phase; phaseEnd = nowS() + (m.dur || 0); roundNo = m.round; lastCount = -1;
       if (phase === 'countdown') {
-        hidePick(); matchOver = false;
-        if (gameMode !== 'run') banner(`ROUND ${roundNo}`);
+        hidePick(); matchOver = false; stopKillcam(); resetRoundStats();
+        if (gameMode !== 'run') banner(`ROUND ${roundNo}<small>${escapeHtml(mapName)}</small>`);
       }
       if (phase === 'live') { ui.center.className = 'count'; ui.center.textContent = 'FIGHT!'; sfx.go(); setTimeout(() => { if (phase === 'live' && ui.center.textContent === 'FIGHT!') { ui.center.textContent = ''; ui.center.className = ''; } }, 700); }
       if (phase === 'pick' && !picking && !gunPicking && !lootPicking && !shopping) { ui.pick.classList.remove('hidden'); ui.cards.innerHTML = ''; ui.pickTitle.textContent = '증강 선택 중'; ui.reroll.classList.add('hidden'); ui.pickWait.classList.remove('hidden'); pickStart = nowS(); pickDur = m.dur; }
@@ -833,7 +845,7 @@ function onMessage(m) {
       break;
     case 'stage':
       stage = m;
-      banner(`${m.boss ? 'BOSS' : 'STAGE ' + m.stage}<small>${m.boss ? escapeHtml(m.name) + ' · ' : ''}${m.stage} / ${m.total}${m.augs ? ` · 봇 증강 ${m.augs}개` : ''}</small>`, m.boss ? 'boss' : '');
+      banner(`${m.boss ? 'BOSS' : 'STAGE ' + m.stage}<small>${m.boss ? escapeHtml(m.name) + ' · ' : ''}${escapeHtml(MAPS[(m.stage - 1) % MAPS.length].name)} · ${m.stage} / ${m.total}${m.augs ? ` · 봇 증강 ${m.augs}개` : ''}</small>`, m.boss ? 'boss' : '');
       updateScore();
       break;
     case 'pick':
@@ -891,6 +903,7 @@ function onMessage(m) {
     }
     case 'hit':
       if (m.target === me.id) {
+        rs.taken += m.dmg || 0;
         me.hp = m.hp; updateHp(); sfx.hurt(); shake = Math.max(shake, heavy(m.w) ? 0.6 : 0.3); hurtPulse = Math.min(1, hurtPulse + (m.dmg || 20) / 60);
         if (m.from) {
           const ang = Math.atan2(-(m.from[0] - me.ent.pos.x), -(m.from[2] - me.ent.pos.z)) - me.yaw;
@@ -901,6 +914,8 @@ function onMessage(m) {
         const o = others.get(m.target);
         if (o) { o.flinch = Math.min(2, o.flinch + (m.head ? 1.6 : 1.0)); o.flinchHead = m.head; }
         if (m.by === me.id) {
+          rs.hits++; rs.dmg += m.dmg || 0; if (m.head) rs.heads++;
+          stats.hits++; stats.dmg += m.dmg || 0; if (m.head) stats.heads++;
           const killing = m.hp <= 0;
           flashClass(ui.hit, killing ? 400 : 160, 'head', !!m.head);
           ui.hit.classList.toggle('kill', killing);
@@ -958,8 +973,11 @@ function onMessage(m) {
     case 'kill': {
       scores = m.scores; updateScore();
       feed(`${nameOf(m.killer)}  [${GUNS[m.w]?.name ?? ''}${m.head ? ' · 헤드샷' : ''}]  ${nameOf(m.victim)}`);
+      recordKillStats(m);
+      setTimeout(() => showRoundResult(m), 450);
       if (m.victim === me.id) {
         me.dead = true; me.hp = 0; me.ads = false; updateHp();
+        if (gameMode !== 'run') startKillcam(m.killer);
         ui.center.className = ''; ui.center.innerHTML = gameMode === 'run' ? '사망' : `라운드 패배<br><small style="font-size:18px">${nameOf(m.killer)} ${m.scores[m.killer]}점</small>`;
       } else {
         const o = others.get(m.victim);
@@ -991,6 +1009,7 @@ function onMessage(m) {
       scores = m.scores; updateScore(); break;
     case 'win':
       matchOver = true;
+      bumpStat(st => { const k = mode === 'online' ? 'online' : 'bot'; st.games[k].played++; if (m.id === me.id) st.games[k].won++; });
       ui.center.className = '';
       ui.center.innerHTML = (m.id === me.id ? '🏆 승리!' : `패배... ${escapeHtml(m.name)} 승리`) + '<br><small style="font-size:18px">잠시 후 새 경기 시작 (증강 초기화)</small>';
       if (m.id === me.id) sfx.fanfare(); else sfx.fail();
@@ -998,6 +1017,7 @@ function onMessage(m) {
     case 'runover':
     case 'runclear': {
       const cleared = m.t === 'runclear' ? m.stage : m.cleared;
+      bumpStat(st => { st.games.run.played++; if (m.t === 'runclear') st.games.run.won++; st.games.run.best = Math.max(st.games.run.best, cleared); });
       const prev = bestRun();
       if (cleared > prev) { try { localStorage.setItem('fps_best_run', cleared); } catch {} }
       ui.runEndTitle.textContent = m.t === 'runclear' ? '런 클리어!' : '런 종료';
@@ -1182,6 +1202,7 @@ function tryFire() {
   me.streak = now - me.lastFire < Wp.interval * 2.5 ? me.streak + 1 : 0;
   me.lastFire = now; firedThisClick = true;
   me.ammo[me.weapon]--; updateAmmo();
+  rs.shots++; stats.shots++;
 
   // 퍼짐: 원 안에 고르게 (샷건 산탄은 방장이 이 방향 둘레로 다시 퍼뜨림)
   const spread = curSpread(Wp);
@@ -1440,6 +1461,106 @@ function updateHuman(o, dt, k, now) {
   h.update(dt, { speed: o.speed, fN: fwd, sN: side, air: o.air, pitch: o.pitch, flinch: o.flinch, flinchHead: o.flinchHead, dead: false });
 }
 
+// ================= 킬캠 =================
+// 최근 3초 동안 나와 상대의 위치·방향을 기록해 두었다가, 내가 죽으면 상대 눈으로 마지막 2.2초를 다시 보여 줌
+const hist = [];
+let killcam = null, selfMesh = null;
+function recordHist() {
+  if (killcam) return;
+  const t = nowS(), os = {};
+  for (const [id, o] of others) os[id] = [o.mesh.position.x, o.mesh.position.y, o.mesh.position.z, o.mesh.rotation.y, o.pitch, o.w];
+  hist.push({ t, me: [me.ent.pos.x, me.ent.pos.y, me.ent.pos.z, me.yaw, me.weapon], os });
+  while (hist.length && t - hist[0].t > 3) hist.shift();
+}
+function sampleHist(t) {
+  let i = hist.length - 1;
+  while (i > 0 && hist[i].t > t) i--;
+  return hist[i];
+}
+function startKillcam(killer) {
+  if (!others.has(killer) || hist.length < 2) return;
+  const end = hist[hist.length - 1].t;
+  killcam = { killer, t0: Math.max(hist[0].t, end - 2.2), end, start: nowS() + 0.55, lastPos: null };
+}
+function stopKillcam() {
+  if (!killcam) return;
+  killcam = null;
+  if (selfMesh) selfMesh.visible = false;
+  ui.killcam.classList.add('hidden');
+}
+function updateKillcam(dt) {
+  if (!killcam) return;
+  const now = nowS();
+  if (now < killcam.start) return;
+  const t = Math.min(killcam.end, killcam.t0 + (now - killcam.start));
+  const h = sampleHist(t), k = h.os[killcam.killer];
+  if (!k || now - killcam.start > (killcam.end - killcam.t0) + 1.4) return stopKillcam();
+  // 상대 눈 위치에서 상대가 보던 방향으로
+  camera.position.set(k[0], k[1] + PLAYER.eye, k[2]);
+  camera.rotation.set(k[4], k[3], 0);
+  if (Math.abs(camera.fov - settings.fov) > 0.01) { camera.fov = settings.fov; camera.updateProjectionMatrix(); }
+  const ko = others.get(killcam.killer); if (ko) ko.mesh.visible = false;
+  // 내 몸 (킬캠 때만 보임)
+  if (!selfMesh) { selfMesh = makeOtherMesh(); scene.add(selfMesh); }
+  const ud = selfMesh.userData;
+  selfMesh.visible = true;
+  ud.setWeapon(h.me[4]);
+  const p = new THREE.Vector3(h.me[0], h.me[1], h.me[2]);
+  const sp = killcam.lastPos ? p.distanceTo(killcam.lastPos) / Math.max(dt, 1e-3) : 0;
+  killcam.lastPos = p.clone();
+  selfMesh.position.copy(p); selfMesh.rotation.set(0, h.me[3], 0);
+  const dead = t >= killcam.end - 0.01;
+  if (ud.human) ud.human.update(dt, { speed: dead ? 0 : sp, fN: sp, sN: 0, air: false, pitch: 0, flinch: 0, flinchHead: false, dead });
+  else if (dead) selfMesh.rotation.x = Math.min(Math.PI / 2, selfMesh.rotation.x + dt * 4);
+  ui.killcam.classList.remove('hidden');
+  ui.killcam.innerHTML = `<b>킬캠</b> ${escapeHtml(nameOf(killcam.killer))}의 시점`;
+}
+
+// ================= 라운드 결과 · 전적 =================
+let rs = null;
+function resetRoundStats() { rs = { shots: 0, hits: 0, heads: 0, dmg: 0, taken: 0 }; }
+resetRoundStats();
+const STAT0 = () => ({ games: { bot: { played: 0, won: 0 }, online: { played: 0, won: 0 }, run: { played: 0, won: 0, best: 0 } }, kills: 0, deaths: 0, headKills: 0, shots: 0, hits: 0, heads: 0, dmg: 0, guns: {}, rounds: 0, roundsWon: 0 });
+const stats = (() => { try { const v = JSON.parse(localStorage.getItem('fps_stats')); if (v && v.games) return Object.assign(STAT0(), v); } catch {} return STAT0(); })();
+function saveStats() { try { localStorage.setItem('fps_stats', JSON.stringify(stats)); } catch {} }
+function bumpStat(fn) { fn(stats); saveStats(); }
+function recordKillStats(m) {
+  stats.rounds++;
+  if (m.killer === me.id) { stats.kills++; stats.roundsWon++; if (m.head) stats.headKills++; stats.guns[m.w] = (stats.guns[m.w] || 0) + 1; }
+  if (m.victim === me.id) stats.deaths++;
+  saveStats();
+}
+function showRoundResult(m) {
+  const won = m.killer === me.id;
+  const dist = m.from ? Math.round(Math.hypot(m.from[0] - (won ? (others.get(m.victim)?.mesh.position.x ?? 0) : me.ent.pos.x), m.from[2] - (won ? (others.get(m.victim)?.mesh.position.z ?? 0) : me.ent.pos.z))) : null;
+  const acc = rs.shots ? Math.round(rs.hits / rs.shots * 100) : 0;
+  ui.roundRes.innerHTML = `<div class="rr-title ${won ? 'win' : 'lose'}">${won ? '라운드 승리' : '라운드 패배'}</div>`
+    + `<div class="rr-grid"><span>명중</span><b>${rs.hits} / ${rs.shots} (${acc}%)</b><span>헤드샷</span><b>${rs.heads}</b>`
+    + `<span>준 피해</span><b>${Math.round(rs.dmg)}</b><span>받은 피해</span><b>${Math.round(rs.taken)}</b>`
+    + `<span>결정타</span><b>${escapeHtml(GUNS[m.w]?.name ?? '')}${m.head ? ' · 헤드샷' : ''}${dist !== null ? ` · ${dist}m` : ''}</b></div>`;
+  ui.roundRes.classList.remove('hidden');
+  clearTimeout(ui.roundRes._t); ui.roundRes._t = setTimeout(() => ui.roundRes.classList.add('hidden'), (RULES.roundEndTime - 0.5) * 1000);
+}
+// 로비 전적 화면
+function showStats() {
+  const s = stats, g = s.games, pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '-';
+  const fav = Object.entries(s.guns).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => `${escapeHtml(GUNS[id]?.name ?? id)} ${n}킬`).join(', ') || '-';
+  $('statsBody').innerHTML = `<div class="rr-grid">`
+    + `<span>봇전</span><b>${g.bot.won}승 ${g.bot.played - g.bot.won}패</b>`
+    + `<span>온라인</span><b>${g.online.won}승 ${g.online.played - g.online.won}패</b>`
+    + `<span>런</span><b>${g.run.played}회 · 클리어 ${g.run.won}회 · 최고 ${Math.max(g.run.best, bestRun())}스테이지</b>`
+    + `<span>킬 / 데스</span><b>${s.kills} / ${s.deaths} (K/D ${s.deaths ? (s.kills / s.deaths).toFixed(2) : s.kills})</b>`
+    + `<span>라운드 승률</span><b>${pct(s.roundsWon, s.rounds)} (${s.roundsWon}/${s.rounds})</b>`
+    + `<span>명중률</span><b>${pct(s.hits, s.shots)} (${s.hits}/${s.shots})</b>`
+    + `<span>헤드샷 킬</span><b>${s.headKills} (${pct(s.headKills, s.kills)})</b>`
+    + `<span>준 피해 합계</span><b>${Math.round(s.dmg)}</b>`
+    + `<span>많이 쓴 총</span><b>${fav}</b></div>`;
+  $('stats').classList.remove('hidden');
+}
+$('statsBtn').onclick = showStats;
+$('statsClose').onclick = () => $('stats').classList.add('hidden');
+$('statsReset').onclick = () => { if (confirm('전적을 모두 지울까요?')) { Object.assign(stats, STAT0()); saveStats(); showStats(); } };
+
 let testHideView = false; // 테스트용
 const clock = new THREE.Clock();
 let sendAcc = 0;
@@ -1462,6 +1583,7 @@ function loop() {
     viewRoot.visible = false;
   }
   updateOthers(dt);
+  if (me.id) { recordHist(); updateKillcam(dt); }
   updateEffects(dt);
   updateShells(dt);
   composer.render();
@@ -1473,4 +1595,4 @@ loop();
 
 // 테스트용 핸들
 setMuted(muted);
-window.__fps = { me, others, hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, get lootPicking() { return lootPicking; }, get shopping() { return shopping; }, selectLoot, lootSlot, endShop, useItem, W, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };
+window.__fps = { me, others, stats, get killcam() { return killcam; }, histLen: () => hist.length, camPos: () => [camera.position.toArray().map(v => +v.toFixed(2)), camera.rotation.toArray().slice(0, 3).map(v => +v.toFixed(2)), camera.rotation.order, hist.slice(-2).map(h => JSON.stringify(h.os))], hideView: v => { testHideView = v; }, testAds: v => { rightDown = v; }, testFire: v => { mouseDown = v; if (v) { locked = true; firedThisClick = false; } }, vGun, get gunPicking() { return gunPicking; }, get lootPicking() { return lootPicking; }, get shopping() { return shopping; }, selectLoot, lootSlot, endShop, useItem, W, selectGun, chooseSlot, passGun, get hostGame() { return hostGame; }, get bot() { return bot; }, get locked() { return locked; }, get phase() { return phase; }, onMessage, choose: id => choose(id, null) };

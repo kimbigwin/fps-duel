@@ -54,6 +54,7 @@
         <label>시야 (FOV) <input type="range" class="fovIn" min="60" max="100" step="1"> <b class="fovVal"></b></label>
       </div>
       <button class="guideBtn link" type="button">조작 안내 보기</button>
+      <button id="statsBtn" class="link" type="button">내 전적 보기</button>
       <button id="creditsBtn" class="link">크레딧 · 사용한 에셋</button>
       <button class="muteBtn" type="button">🔊 소리 켜짐 (M)</button>
     </div>
@@ -79,6 +80,17 @@
         <li><b>엔진</b> — three.js (MIT), PeerJS (MIT)</li>
       </ul>
       <button id="creditsClose" class="secondary">닫기</button>
+    </div>
+  </div>
+
+  <!-- 전적 -->
+  <div id="stats" class="overlay hidden">
+    <div class="panel">
+      <h1>내 전적</h1>
+      <p class="sub">이 브라우저에 저장됩니다</p>
+      <div id="statsBody"></div>
+      <button id="statsClose" class="secondary">닫기</button>
+      <button id="statsReset" class="link" type="button">전적 초기화</button>
     </div>
   </div>
 
@@ -115,7 +127,9 @@
         <li>총에는 <b>등급</b>이 있어요 (일반·고급·희귀·영웅). 등급이 높을수록 데미지가 높고, 희귀부터는 데미지 증강 효과가 더 커져요.</li>
         <li>총을 고른 뒤 <b>파밍</b> 카드 1장을 받아요. <b>부착물</b>(확장 탄창·소음기·손잡이·조준경)은 1번/2번 <b>칸</b>에 붙어서 그 칸의 총을 바꿔도 따라가요. 총에 안 맞는 부착물은 비슷한 효과로 바뀌고, 카드에 바뀐 효과가 보여요.</li>
         <li><b>방어구</b>(헬멧·조끼 Lv1~3)는 머리·몸통 피해를 줄여 주고, <b>소모품</b>은 3번(구급 키트)·4번(아드레날린) 키로 써요. 쓰는 동안은 쏠 수 없어요.</li>
-        <li>로그라이크 런은 10스테이지를 혼자 깨는 모드입니다. 한 번 죽으면 처음부터 다시 합니다. 스테이지를 깰 때마다 골드를 얻고, 상점에서 부착물·방어구·소모품을 삽니다.</li>
+        <li>맵은 3개(컨테이너 야드·십자 골목·기둥 폐허)이고 라운드마다 바뀝니다. 상자 계단을 점프로 올라 높은 곳을 잡을 수 있어요.</li>
+        <li>죽으면 상대 시점의 <b>킬캠</b>이 나오고, 라운드가 끝날 때마다 명중률·피해 같은 <b>라운드 결과</b>가 보입니다. 전적은 처음 화면의 '내 전적 보기'에 저장됩니다.</li>
+        <li>로그라이크 런은 10스테이지를 혼자 깨는 모드입니다. 한 번 죽으면 처음부터 다시 합니다. 스테이지를 깰 때마다 골드를 얻고, 상점에서 부착물·방어구·소모품을 삽니다. 3스테이지마다 상점에 무료 휴식(최대 체력 +15)이 나옵니다.</li>
       </ul>
       <button id="guideClose" type="button">알겠어요</button>
     </div>
@@ -162,6 +176,8 @@
     <div id="myAugs" class="augchips"></div>
     <div id="cooldowns"></div>
     <div id="kit"></div>
+    <div id="killcamTag" class="hidden"></div>
+    <div id="roundRes" class="hidden"></div>
     <div id="useBar" class="hidden"><span></span><div><i></i></div></div>
     <div id="hpbox"><span>HP</span><div id="hpbar"><div id="hpfill"></div></div><b id="hptext">100</b></div>
     <div id="ammobox">
