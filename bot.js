@@ -3,6 +3,7 @@ import { ARENA, lineOfSight, currentMap } from './map.js';
 import { DEFAULT_LOADOUT } from './guns.js';
 import { SOLIDS, stepMovement, MOVE } from './physics.js';
 import { statsFor, effWeapon, stageInfo } from './augments.js';
+import { gameNow } from './clock.js';
 export { lineOfSight };
 
 export const DIFFICULTY = {
@@ -37,7 +38,7 @@ function nearestFree(gx, gz) {
   return [gx, gz];
 }
 
-function findPath(from, to) {
+export function findPath(from, to) {
   ensureGrid();
   const [sx, sz] = nearestFree(toCell(from.x), toCell(from.z));
   const [tx, tz] = nearestFree(toCell(to.x), toCell(to.z));
@@ -110,15 +111,15 @@ export class Bot {
       this.ent.vel = { x: 0, y: 0, z: 0 };
       this.yaw = m.yaw; this.pitch = 0; this.dead = false;
       this.ammo = this.fullAmmo();
-      this.reloadUntil = 0; this.seeTime = 0; this.path = []; this.pendingReload = null; this.blindUntil = 0; this.nextNade = performance.now() / 1000 + 6 + Math.random() * 6;
+      this.reloadUntil = 0; this.seeTime = 0; this.path = []; this.pendingReload = null; this.blindUntil = 0; this.nextNade = gameNow() + 6 + Math.random() * 6;
       const st = this.stage();
       if (st) this.cfg = levelCfg(st.level);
     }
     if (m.t === 'augs' && m.id === this.id) { this.augs = m.augs; this.stats = statsFor(m.augs); }
     if (m.t === 'loadout' && m.id === this.id) { this.kit = m.kit; this.loadout = m.loadout; this.weapon = this.loadout[0]; this.ammo = this.fullAmmo(); this.pendingReload = null; }
-    if (m.t === 'flash' && m.id === this.id) this.blindUntil = performance.now() / 1000 + m.dur;
-    if (m.t === 'buff' && m.id === this.id) { this.buffUntil = performance.now() / 1000 + m.dur; this.buffSpeed = m.speed; }
-    if (m.t === 'phase' && m.phase === 'live') this.waitUntil = performance.now() / 1000 + 0.25;
+    if (m.t === 'flash' && m.id === this.id) this.blindUntil = gameNow() + m.dur;
+    if (m.t === 'buff' && m.id === this.id) { this.buffUntil = gameNow() + m.dur; this.buffSpeed = m.speed; }
+    if (m.t === 'phase' && m.phase === 'live') this.waitUntil = gameNow() + 0.25;
     if (m.t === 'kill' && m.victim === this.id) this.dead = true;
     if (m.t === 'hit' && m.target === this.id && m.from) {
       // 맞으면 공격자 쪽으로 몸을 돌림
@@ -133,7 +134,7 @@ export class Bot {
 
   update(dt) {
     if (this.dead || this.room.phase !== 'live') return;
-    const now = performance.now() / 1000;
+    const now = gameNow();
     if (now < (this.waitUntil || 0)) return;
     if (this.pendingReload && now >= this.reloadUntil) { this.ammo[this.pendingReload] = this.W(this.pendingReload).mag; this.pendingReload = null; }
     const st = this.stage();
@@ -159,7 +160,7 @@ export class Bot {
       const [near, far] = this.loadout;
       if (now > this.reloadUntil) this.weapon = st?.weapon || (dist > 24 && this.ammo[far] > 0 ? far : near);
       // 유령 증강으로 투명해진 상대는 못 봄
-      const ghosted = (t.ghostUntil || 0) > Date.now() / 1000;
+      const ghosted = (t.ghostUntil || 0) > gameNow();
       // 소모품: 안 보일 때 체력이 낮으면 구급 키트, 싸우는 중 많이 맞았으면 아드레날린
       const selfP = this.room.players.get(this.id), items = this.kit?.items;
       if (selfP && items && now > (this.nextUse || 0)) {

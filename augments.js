@@ -124,9 +124,9 @@ export const RUN = { stages: 10 };
 // 스테이지별 봇 설정 (난이도 0~1.2, 보스 정보)
 export function stageInfo(stage) {
   if (stage === 5) return { name: '보스: 저격수', boss: true, level: 0.75, hpBonus: 50, weapon: 'snm_w', loadout: ['ar_w', 'snm_w'], augs: 1 };
-  if (stage === 10) return { name: '최종 보스: 중장갑', boss: true, level: 1.0, hpBonus: 200, weapon: 'sga_e', loadout: ['sga_e', 'ar_w'], rush: true, augs: 3 };
+  if (stage === 10) return { name: '최종 보스: 중장갑', boss: true, level: 1.0, hpBonus: 80, weapon: 'sga_e', loadout: ['sga_e', 'ar_w'], rush: true, augs: 2 };
   const level = Math.min(1.1, 0.05 + (stage - 1) * 0.12);
   // 스테이지마다 봇 총 구성이 달라짐 (앞: 근중거리, 뒤: 원거리)
-  const LOAD = { 1: ['ar_w', 'snm_w'], 2: ['smg_w', 'pis_w'], 3: ['ar_e', 'snr_w'], 4: ['sgp_w', 'br_e'], 6: ['br_w', 'snr_e'], 7: ['smgc_e', 'snm_w'], 8: ['sga_w', 'snr_w'], 9: ['ar_e', 'snm_e'] };
+  const LOAD = { 1: ['ar_w', 'snm_w'], 2: ['smg_w', 'pis_w'], 3: ['ar_w', 'snr_w'], 4: ['sgp_w', 'br_e'], 6: ['br_w', 'snr_e'], 7: ['smgc_e', 'snm_w'], 8: ['sga_w', 'snr_w'], 9: ['ar_e', 'snm_e'] };
   return { name: `스테이지 ${stage}`, boss: false, level, hpBonus: 0, weapon: null, loadout: LOAD[stage] || ['ar_w', 'snm_w'], augs: Math.floor((stage - 1) / 3) };
 }
