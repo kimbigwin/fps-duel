@@ -45,7 +45,7 @@
         <b>조작</b> WASD 이동 · Shift 달리기 · Space 점프 · 마우스 조준<br>
         좌클릭 사격 · 우클릭 정조준/스코프 · R 재장전 · 1/2 또는 휠 무기 교체 · C 앉기(달리다 C 미끄러지기) · Q/E 기울이기 · G 수류탄 · T 섬광탄 · M 음소거 · Esc 메뉴<br>
         증강은 1·4·8라운드 뒤에 같은 등급 카드 중 1장 선택 (클릭 또는 1~4 키), 저주 카드는 번갈아 추가<br>
-        증강을 고른 뒤 총 20종 중 무작위 3개(등급: 일반·고급·희귀·영웅)가 나오면, 하나를 골라 1번/2번 칸과 바꾸거나 패스 (시간 제한 없음)<br>
+        증강을 고른 뒤 총 20종 중 무작위 3개(등급: 일반·고급·희귀·영웅)가 나오면, 하나를 골라 1번 칸(Q)/2번 칸(E)과 바꾸거나 패스 (봇전·런은 시간 제한 없음)<br>
         이어서 파밍 카드 1장(부착물·방어구·소모품). 런은 스테이지마다 골드로 상점 이용 · 3 구급 키트 · 4 아드레날린<br>
         온라인은 상대에게 같은 방 코드를 알려주세요. 먼저 들어온 사람이 방장이 됩니다.
       </div>
@@ -106,6 +106,7 @@
       <button class="guideBtn link" type="button">조작 안내 보기</button>
       <button class="customBtn link" type="button">꾸미기 · 업적</button>
       <button class="muteBtn" type="button">🔊 소리 켜짐 (M)</button>
+      <button class="lobbyBtn link" type="button">처음 화면으로 나가기</button>
     </div>
   </div>
 
@@ -126,11 +127,11 @@
       <div class="guideGrid">
         <div><b>이동</b> W A S D · <b>달리기</b> Shift · <b>점프</b> Space</div>
         <div><b>조준</b> 마우스 · <b>사격</b> 좌클릭 · <b>정조준</b> 우클릭</div>
-        <div><b>재장전</b> R · <b>무기 교체</b> 1 / 2 또는 휠</div>
+        <div><b>재장전</b> R · <b>무기 교체</b> 1 / 2 또는 휠 (재장전 중에 바꾸면 재장전 취소)</div>
         <div><b>구급 키트</b> 3 · <b>아드레날린</b> 4</div>
         <div><b>수류탄</b> G · <b>섬광탄</b> T (라운드마다 1개씩)</div>
         <div><b>앉기</b> C (누르는 동안) · <b>미끄러지기</b> 달리다가 C · <b>기울이기</b> Q / E</div>
-        <div><b>메뉴</b> Esc · <b>소리 켜기/끄기</b> M</div>
+        <div><b>메뉴</b> Esc (봇전·런은 게임이 멈춤) · <b>소리 켜기/끄기</b> M</div>
       </div>
       <h3>게임 방법</h3>
       <ul>
@@ -139,7 +140,7 @@
         <li>수류탄은 터질 때 가까울수록 큰 피해를 주고 나무 상자를 부숩니다. 섬광탄을 바라보면 몇 초 동안 눈이 멉니다. 나무 상자는 총으로도 부술 수 있어요.</li>
         <li>조준점이 벌어진 만큼 총알이 퍼집니다. 계속 쏘거나 움직이거나 점프하면 더 벌어지고, 정조준하면 모입니다.</li>
         <li>샷건은 원형 조준점 안으로 산탄이 퍼집니다. 가까울수록 강합니다.</li>
-        <li>정해진 라운드 뒤에 <b>증강</b> 카드 1장을 고르고, 이어서 <b>총</b> 3개 중 하나를 골라 1번/2번 칸과 바꾸거나 패스합니다. 총 선택은 시간 제한이 없습니다.</li>
+        <li>정해진 라운드 뒤에 <b>증강</b> 카드 1장을 고르고, 이어서 <b>총</b> 3개 중 하나를 숫자키(1~3)로 고르고, <b>Q</b>(1번 칸) 또는 <b>E</b>(2번 칸)로 바꾸거나 X로 패스합니다. 봇전·런은 시간 제한이 없습니다.</li>
         <li>총에는 <b>등급</b>이 있어요 (일반·고급·희귀·영웅). 등급이 높을수록 데미지가 높고, 희귀부터는 데미지 증강 효과가 더 커져요.</li>
         <li>총을 고른 뒤 <b>파밍</b> 카드 1장을 받아요. <b>부착물</b>(확장 탄창·소음기·손잡이·조준경)은 1번/2번 <b>칸</b>에 붙어서 그 칸의 총을 바꿔도 따라가요. 총에 안 맞는 부착물은 비슷한 효과로 바뀌고, 카드에 바뀐 효과가 보여요.</li>
         <li><b>방어구</b>(헬멧·조끼 Lv1~3)는 머리·몸통 피해를 줄여 주고, <b>소모품</b>은 3번(구급 키트)·4번(아드레날린) 키로 써요. 쓰는 동안은 쏠 수 없어요.</li>
@@ -189,15 +190,15 @@
     <div id="banner"></div>
     <div id="dmgLayer"></div>
     <div id="opAugs" class="augchips"></div>
-    <div id="myAugs" class="augchips"></div>
+    
     <div id="cooldowns"></div>
-    <div id="kit"></div>
+    <div id="leftStack"><div id="kit"></div><div id="myAugs" class="augchips"></div></div>
     <div id="killcamTag" class="hidden"></div>
     <div id="killStamp"></div>
     <div id="blind"></div>
     <div id="roundRes" class="hidden"></div>
     <div id="useBar" class="hidden"><span></span><div><i></i></div></div>
-    <div id="hpbox"><span>HP</span><div id="hpbar"><div id="hpfill"></div></div><b id="hptext">100</b></div>
+    <div id="hpbox"><span>HP</span><div id="hpbar"><div id="hpfill"></div></div><b id="hptext">100</b><em id="hpbonus"></em></div>
     <div id="ammobox">
       <div id="wname">돌격소총</div>
       <div><b id="ammo">30</b><span id="ammomax"> / 30</span></div>

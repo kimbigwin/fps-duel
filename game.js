@@ -1,18 +1,52 @@
 // 게임 판정 로직: 방장(먼저 들어온 사람) 브라우저에서 실행됩니다.
 // 라운드제: 킬 1번 = 1라운드. 라운드마다 두 사람 모두 서로 안 보이는 먼 곳에서 다시 시작.
-import { RULES, solidAABBs, rayAABB, playerHitboxes, pickSpawnPair, faceCenter, setMap, currentMap, MAPS, eyeHeight, rightOf, POSE, BOXES, isWood, CRATE_HP, breakBox, lineOfSight } from './map.js';
+import { RULES, solidAABBs, rayAABB, playerHitboxes, pickSpawnPair, SPAWN_POINTS, canSee, faceCenter, setMap, currentMap, MAPS, eyeHeight, rightOf, POSE, BOXES, isWood, CRATE_HP, breakBox, lineOfSight } from './map.js';
 import { NADE, simNade } from './physics.js';
+import { gameNow } from './clock.js';
+import { findPath } from './bot.js';
 import { statsFor, effWeapon, rollOptions, rollTier, hasCurse, stageInfo, RUN } from './augments.js';
-import { DEFAULT_LOADOUT, rangeMul, rollGuns } from './guns.js';
+import { DEFAULT_LOADOUT, GUNS, rangeMul, rollGuns } from './guns.js';
 import { newKit, rollGrade, rollLoot, cardPrice, ARMOR, ITEMS, MAX_ITEMS, REST } from './loot.js';
 
 const SOLIDS = solidAABBs();
-const nowS = () => Date.now() / 1000;
+
+// 라운드 스폰: 두 사람이 서로에게 가는 길을 따라 걸을 때 오래 안 보이는 쌍을 고름
+// (2026-11-04 테스트: 스폰 자리만 안 보이는 쌍을 고르면 대부분 2초 안에 서로 보였음)
+// 맵마다 한 번만 계산해서 기억
+const spawnCache = {};
+const along = (path, s, dist) => {
+  let p = { x: s[0], z: s[2] }, left = dist;
+  for (const w of path) { const d = Math.hypot(w.x - p.x, w.z - p.z); if (d >= left) return [p.x + (w.x - p.x) * left / d, 0, p.z + (w.z - p.z) * left / d]; left -= d; p = w; }
+  return [p.x, 0, p.z];
+};
+function spawnPair() {
+  const mi = currentMap();
+  if (!spawnCache[mi]) {
+    const pts = SPAWN_POINTS.map(([x, z]) => [x, 0, z]), list = [];
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i], b = pts[j];
+      if (canSee(a, b)) continue;
+      const pa = findPath({ x: a[0], z: a[2] }, { x: b[0], z: b[2] }), pb = findPath({ x: b[0], z: b[2] }, { x: a[0], z: a[2] });
+      let first = 30;
+      for (let k = 2; k <= 30; k += 2) if (canSee(along(pa, a, k), along(pb, b, k))) { first = k; break; }
+      list.push({ a, b, first, d: Math.hypot(a[0] - b[0], a[2] - b[2]) });
+    }
+    const best = Math.max(...list.map(p => p.first));
+    spawnCache[mi] = list.filter(p => p.first >= best - 4).sort((x, y) => y.first - x.first || y.d - x.d).slice(0, 8);
+  }
+  const top = spawnCache[mi];
+  if (!top.length) return pickSpawnPair();
+  const p = top[Math.floor(Math.random() * top.length)];
+  return Math.random() < 0.5 ? [p.a, p.b] : [p.b, p.a];
+}
+const nowS = gameNow;
 
 export class GameRoom {
   // mode: 'duel'(온라인/일반 봇전) | 'run'(봇전 로그라이크)
-  constructor(roomName, mode = 'duel') {
+  // waitReady: 봇전·런은 사람이 '클릭해서 시작'을 누른 뒤에 경기를 시작함
+  constructor(roomName, mode = 'duel', { waitReady = false } = {}) {
     this.roomName = roomName;
+    this.waitReady = waitReady; this.ready = !waitReady;
     this.mode = mode;
     this.players = new Map();
     this.nextId = 1;
@@ -24,8 +58,21 @@ export class GameRoom {
   get over() { return this.phase === 'over'; }
   get stage() { return this.round + 1; }
 
-  later(sec, fn) { const t = setTimeout(() => { this.timers = this.timers.filter(x => x !== t); fn(); }, sec * 1000); this.timers.push(t); }
-  clearTimers() { this.timers.forEach(clearTimeout); this.timers = []; }
+  // 예약 작업. 일시정지(봇전·런)하면 남은 시간을 기억했다가 이어서 돎
+  later(sec, fn) {
+    const job = { fn, due: nowS() + sec, h: null };
+    const arm = () => { job.h = setTimeout(() => { this.timers = this.timers.filter(x => x !== job); fn(); }, Math.max(0, job.due - nowS()) * 1000); };
+    job.arm = arm;
+    if (!this.paused) arm();
+    this.timers.push(job);
+  }
+  clearTimers() { this.timers.forEach(j => clearTimeout(j.h)); this.timers = []; }
+  setPaused(v) {
+    if (!!v === !!this.paused) return;
+    this.paused = !!v;
+    // 시계(gameNow)는 밖에서 멈추므로 due는 그대로 두고 타이머만 끄고 켬
+    for (const j of this.timers) { clearTimeout(j.h); j.h = null; if (!v) j.arm(); }
+  }
   dispose() { this.clearTimers(); this.players.clear(); }
 
   broadcast(msg) { this.players.forEach(p => p.send(msg)); }
@@ -58,6 +105,7 @@ export class GameRoom {
     p.pos = pos; p.cr = 0; p.ln = 0; p.nades = { frag: 1, flash: 1 };
     p.maxHp = p.stats.maxHp + (p.hpBonus || 0);
     p.hp = p.maxHp + bonusHp;
+    p.capHp = p.hp;   // 이번 라운드 회복 상한 (뒤질 때 보너스 포함)
     p.dead = false;
     p.ammo = Object.fromEntries(p.loadout.map(k => [k, this.W(p, k).mag]));
     p.lifeId = (p.lifeId || 0) + 1; p.usingUntil = 0;
@@ -89,7 +137,7 @@ export class GameRoom {
     });
     this.players.forEach(p => p !== me && p.send({ t: 'join', id: me.id, name: me.name, pos: me.pos, yaw: 0, hp: me.hp, augs: me.augs, loadout: me.loadout, kit: me.kit }));
     this.broadcast({ t: 'scores', scores: this.scores() });
-    if (this.players.size === 2) this.later(1, () => this.startMatch());
+    if (this.players.size === 2 && this.ready) this.later(1, () => this.startMatch());
     return me.id;
   }
 
@@ -128,7 +176,7 @@ export class GameRoom {
       }
       if (augs.length !== p.augs.length) this.setAugs(p, augs);
       // 봇 방어구: 스테이지가 오를수록 단단해짐
-      const s = this.stage, armor = { helmet: s >= 10 ? 3 : s >= 8 ? 2 : s >= 5 ? 1 : 0, vest: s >= 9 ? 3 : s >= 6 ? 2 : s >= 3 ? 1 : 0 };
+      const s = this.stage, armor = { helmet: s >= 8 ? 2 : s >= 5 ? 1 : 0, vest: s >= 10 ? 1 : s >= 9 ? 3 : s >= 6 ? 2 : s >= 4 ? 1 : 0 };
       const kit = { ...p.kit, armor };
       if ((info.loadout && info.loadout.join() !== p.loadout.join()) || JSON.stringify(armor) !== JSON.stringify(p.kit.armor)) this.setLoadout(p, info.loadout || p.loadout, kit);
     }
@@ -142,7 +190,7 @@ export class GameRoom {
     setMap(mi, true);   // 부서진 상자도 되살림
     this.crateHp = {};
     this.broadcast({ t: 'map', i: mi, name: MAPS[mi].name });
-    const [a, b] = pickSpawnPair();
+    const [a, b] = spawnPair();
     list.forEach((p, i) => {
       const other = list[1 - i];
       // 3점 이상 뒤지면 이번 라운드 체력 +20 (온라인/일반 봇전)
@@ -191,7 +239,9 @@ export class GameRoom {
     const pickers = runMode ? list.filter(p => !p.isBot) : list;
     const top = Math.max(...list.map(p => p.score));
     this.pickers = new Set(pickers.map(p => p.id));
-    this.setPhase('pick', RULES.pickTime);
+    // 봇전·런은 증강도 총 선택처럼 시간 제한 없음 (온라인은 상대를 기다리게 하지 않게 12초)
+    const dur = this.waitReady ? 0 : RULES.pickTime;
+    this.setPhase('pick', dur);
     // 이번 선택의 등급은 모두 같음. 저주 카드는 선택마다 번갈아 1장 추가
     const n = this.pickNo || 0;
     this.pickNo = n + 1;
@@ -203,9 +253,9 @@ export class GameRoom {
       // 뒤지고 있으면 새로고침 1번 (런은 매번 1번)
       p.rerolls = runMode ? 1 : (p.score < top ? 1 : 0);
       if (p.autoPick) this.later(0.8 + Math.random(), () => this.message(p.id, { t: 'pick', id: p.pickOpts[Math.floor(Math.random() * p.pickOpts.length)] }));
-      else p.send({ t: 'pick', opts: p.pickOpts, rerolls: p.rerolls, dur: RULES.pickTime, tier: this.pickTier, curse: this.pickCurse });
+      else p.send({ t: 'pick', opts: p.pickOpts, rerolls: p.rerolls, dur, tier: this.pickTier, curse: this.pickCurse });
     }
-    this.later(RULES.pickTime, () => {
+    if (dur) this.later(dur, () => {
       if (this.phase !== 'pick') return;
       // 증강을 아직 안 고른 사람은 첫 카드로 정하고 총 선택으로 넘어감
       for (const id of [...this.pickers]) { const p = this.players.get(id); if (p && p.pickOpts && !p.gunOpts) this.message(id, { t: 'pick', id: p.pickOpts[0] }); }
@@ -218,7 +268,12 @@ export class GameRoom {
   startGunPick(p) {
     p.gunOpts = rollGuns(p.loadout, 3).map(id => ({ id, grade: rollGrade(this.lootLevel()) }));
     // 사람은 시간 제한 없이 고를 때까지 기다림 (사용자 요청: 시간 초과 자동 패스 없음)
-    if (p.autoPick) this.later(0.6 + Math.random() * 0.6, () => this.message(p.id, { t: 'gunpick', pass: true }));
+    // 봇: 반쯤은 새 총을 집음 (저격·지정사수는 2번 칸, 나머지는 1번 칸)
+    if (p.autoPick) this.later(0.6 + Math.random() * 0.6, () => {
+      const o = p.gunOpts?.[Math.floor(Math.random() * p.gunOpts.length)];
+      const far = o && (GUNS[o.id]?.cls === 'sniper' || GUNS[o.id]?.cls === 'dmr');
+      this.message(p.id, o && this.mode === 'duel' && Math.random() < 0.55 ? { t: 'gunpick', id: o.id, slot: far ? 1 : 0 } : { t: 'gunpick', pass: true });
+    });
     else p.send({ t: 'gunpick', opts: p.gunOpts, loadout: p.loadout, dur: 0 });
   }
 
@@ -266,7 +321,7 @@ export class GameRoom {
     const now = nowS();
     const { dmg, killed } = this.damage(att, v, base, false, now);
     if (!dmg) return;
-    this.broadcast({ t: 'hit', target: v.id, by: att.id, hp: Math.max(0, v.hp), dmg, head: false, part: 'body', w: 'nade', from: at, at: [v.pos[0], v.pos[1] + 1, v.pos[2]] });
+    this.broadcast({ t: 'hit', target: v.id, by: att.id, hp: Math.max(0, Math.round(v.hp)), dmg, head: false, part: 'body', w: 'nade', from: at, at: [v.pos[0], v.pos[1] + 1, v.pos[2]] });
     if (killed && this.phase === 'live') {
       v.dead = true;
       const killer = att === v ? ([...this.players.values()].find(p => p !== v) || att) : att;
@@ -321,11 +376,11 @@ export class GameRoom {
     victim.hp -= dmg;
     let revived = false;
     if (victim.hp <= 0 && victim.stats.revive && !victim.reviveUsed) {
-      victim.hp = Math.min(victim.maxHp, victim.stats.revive); victim.reviveUsed = true; victim.invulnUntil = now + 2; revived = true;
+      victim.hp = Math.min(victim.capHp ?? victim.maxHp, victim.stats.revive); victim.reviveUsed = true; victim.invulnUntil = now + 2; revived = true;
     }
     if (s.lifesteal && !shooter.dead) {
-      shooter.hp = Math.min(shooter.maxHp, shooter.hp + Math.round(dmg * s.lifesteal));
-      this.broadcast({ t: 'hp', id: shooter.id, hp: shooter.hp });
+      shooter.hp = Math.min(shooter.capHp ?? shooter.maxHp, shooter.hp + Math.round(dmg * s.lifesteal));
+      this.broadcast({ t: 'hp', id: shooter.id, hp: Math.round(shooter.hp) });
     }
     if (victim.stats.ghost && victim.hp > 0 && now >= victim.ghostReadyAt) {
       const [gd, gc] = victim.stats.ghost;
@@ -377,6 +432,14 @@ export class GameRoom {
     const me = this.players.get(id);
     if (!me || !m) return;
 
+    // 봇전·런: 사람이 처음 클릭하면 경기 시작
+    if (m.t === 'ready' && !this.ready) {
+      this.ready = true;
+      if (this.players.size === 2 && this.phase === 'waiting') this.later(0.3, () => this.startMatch());
+      return;
+    }
+    // 무기를 바꾸면 재장전 취소
+    if (m.t === 'reloadcancel') { me.reloadEnd = 0; return; }
     if (m.t === 'state' && !me.dead) {
       if (!Array.isArray(m.p) || m.p.length !== 3 || !m.p.every(Number.isFinite)) return;
       me.pos = m.p; me.yaw = +m.yaw || 0; me.pitch = +m.pitch || 0;
@@ -440,12 +503,12 @@ export class GameRoom {
       this.broadcast({ t: 'using', id: me.id, item: m.item, dur: it.use });
       this.later(it.use, () => {
         if (me.dead || me.lifeId !== life) return;
-        if (m.item === 'heal') { me.hp = Math.min(me.maxHp, me.hp + it.hp); this.broadcast({ t: 'hp', id: me.id, hp: me.hp }); }
+        if (m.item === 'heal') { me.hp = Math.min(me.capHp ?? me.maxHp, Math.round(me.hp + it.hp)); this.broadcast({ t: 'hp', id: me.id, hp: me.hp }); }
         else {
           // 아드레날린: dur초 동안 0.5초마다 조금씩 회복 + 이동 빠름
           this.broadcast({ t: 'buff', id: me.id, speed: it.speed, dur: it.dur });
           const ticks = it.dur / 0.5, per = it.hp / ticks;
-          for (let k = 1; k <= ticks; k++) this.later(k * 0.5, () => { if (me.dead || me.lifeId !== life) return; me.hp = Math.min(me.maxHp, me.hp + per); this.broadcast({ t: 'hp', id: me.id, hp: Math.round(me.hp) }); });
+          for (let k = 1; k <= ticks; k++) this.later(k * 0.5, () => { if (me.dead || me.lifeId !== life) return; me.hp = Math.min(me.capHp ?? me.maxHp, me.hp + per); this.broadcast({ t: 'hp', id: me.id, hp: Math.round(me.hp) }); });
         }
       });
     }
@@ -535,7 +598,7 @@ export class GameRoom {
       for (const [v, e] of byVictim) {
         const { dmg, killed } = this.damage(me, v, e.base, false, now, W.syn);
         const part = e.head ? 'head' : e.legs === e.n ? 'leg' : 'body';
-        this.broadcast({ t: 'hit', target: v.id, by: me.id, hp: Math.max(0, v.hp), dmg, head: e.head, part, w: wname, from: o, at: e.at, through: e.through, pellets: e.n });
+        this.broadcast({ t: 'hit', target: v.id, by: me.id, hp: Math.max(0, Math.round(v.hp)), dmg, head: e.head, part, w: wname, from: o, at: e.at, through: e.through, pellets: e.n });
         if (killed && this.phase === 'live') {
           v.dead = true;
           me.score++;

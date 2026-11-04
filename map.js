@@ -83,7 +83,7 @@ export const RULES = {
   maxHp: 100,
   winRounds: 7,          // 먼저 7라운드 이기면 승리 (킬 1번 = 1라운드)
   countdown: 3,          // 라운드 시작 전 카운트다운 (초)
-  roundEndTime: 3.4,     // 킬 후 다음 단계까지 (초). 킬캠·라운드 결과를 볼 시간
+  roundEndTime: 4.5,     // 킬 후 다음 단계까지 (초). 킬캠·라운드 결과를 볼 시간 (2026-11-04: 3.4초는 결과를 읽기에 짧아서 늘림)
   pickTime: 12,          // 증강 선택 제한 시간 (초)
   gunPickTime: 10,       // 증강 뒤 총 선택 제한 시간 (초)
   augmentRounds: [1, 4, 8], // 이 라운드가 끝난 뒤 증강 선택
